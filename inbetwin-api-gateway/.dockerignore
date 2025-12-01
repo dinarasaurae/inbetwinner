@@ -1,0 +1,27 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build
+*.exe
+*.test
+*.out
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Temp
+tmp/
+temp/
+*.log
+
+# Tests
+*_test.go

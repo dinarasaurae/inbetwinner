@@ -1,0 +1,182 @@
+###
+# Auth Service API Tests
+# Тестирование в JetBrains HTTP Client
+###
+
+@baseUrl = http://localhost:3001
+@apiUrl = {{baseUrl}}/api/v1
+
+### 1. Health Check
+GET {{baseUrl}}/health
+Accept: application/json
+
+### 2. Регистрация нового пользователя
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "password123",
+  "first_name": "John",
+  "last_name": "Doe"
+}
+
+### 3. Регистрация с тем же email (должна вернуть ошибку)
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "password456",
+  "first_name": "Jane",
+  "last_name": "Smith"
+}
+
+### 4. Вход пользователя
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "password123"
+}
+
+> {%
+  // Сохраняем токены для следующих тестов
+  client.global.set("access_token", response.body.access_token);
+  client.global.set("refresh_token", response.body.refresh_token);
+  client.log("Access Token: " + response.body.access_token);
+  client.log("Refresh Token: " + response.body.refresh_token);
+%}
+
+### 5. Вход с неправильным паролем
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "wrong_password"
+}
+
+### 6. Получение профиля (с JWT токеном)
+GET {{apiUrl}}/auth/profile
+Authorization: Bearer {{access_token}}
+Accept: application/json
+
+### 7. Получение профиля без токена (должна быть ошибка 401)
+GET {{apiUrl}}/auth/profile
+Accept: application/json
+
+### 8. Обновление access токена
+POST {{apiUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "{{refresh_token}}"
+}
+
+> {%
+  // Обновляем access token
+  if (response.body.access_token) {
+    client.global.set("access_token", response.body.access_token);
+    client.log("New Access Token: " + response.body.access_token);
+  }
+%}
+
+### 9. Обновление токена с неправильным refresh token
+POST {{apiUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "invalid_refresh_token"
+}
+
+### 10. Mock route для тестирования (совместимость с API Gateway)
+GET {{apiUrl}}/test
+Accept: application/json
+
+### 11. Регистрация другого пользователя для дополнительных тестов
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "user2@example.com",
+  "password": "password123",
+  "first_name": "Alice",
+  "last_name": "Johnson"
+}
+
+### 12. Вход второго пользователя
+POST {{apiUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "user2@example.com",
+  "password": "password123"
+}
+
+> {%
+  // Сохраняем токены второго пользователя
+  client.global.set("access_token_2", response.body.access_token);
+  client.global.set("refresh_token_2", response.body.refresh_token);
+%}
+
+### 13. Профиль второго пользователя
+GET {{apiUrl}}/auth/profile
+Authorization: Bearer {{access_token_2}}
+Accept: application/json
+
+### 14. Тест валидации - регистрация без email
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "password": "password123",
+  "first_name": "No",
+  "last_name": "Email"
+}
+
+### 15. Тест валидации - слишком короткий пароль
+POST {{apiUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "short@example.com",
+  "password": "123",
+  "first_name": "Short",
+  "last_name": "Password"
+}
+
+### 16. Тест обновления профиля (TODO)
+PUT {{apiUrl}}/auth/profile
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "first_name": "John Updated",
+  "last_name": "Doe Updated"
+}
+
+###
+# Дополнительные заметки:
+#
+# 1. Перед запуском тестов убедитесь что:
+#    - PostgreSQL запущен
+#    - Auth Service запущен на порту 3001
+#    - База данных создана и миграции применены
+#
+# 2. Порядок выполнения тестов важен:
+#    - Сначала запустите регистрацию
+#    - Затем вход (токены автоматически сохранятся)
+#    - Остальные тесты можно запускать в любом порядке
+#
+# 3. Токены автоматически сохраняются в переменные:
+#    - {{access_token}} - для основного пользователя
+#    - {{refresh_token}} - для основного пользователя
+#    - {{access_token_2}} - для второго пользователя
+#    - {{refresh_token_2}} - для второго пользователя
+#
+# 4. JWT токены действительны:
+#    - Access token: 15 минут
+#    - Refresh token: 7 дней
+###

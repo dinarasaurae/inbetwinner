@@ -1,0 +1,195 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: inbetwin-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-auth_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-auth_password}
+      POSTGRES_DB: ${DB_NAME:-auth_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-auth_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inbetwin-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: inbetwin-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inbetwin-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: inbetwin-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: inbetwin
+      RABBITMQ_DEFAULT_PASS: inbetwin_password
+    ports:
+      - "5672:5672"    # AMQP port
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inbetwin-network
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: ./auth-service/Dockerfile
+    container_name: inbetwin-auth-service
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      ENVIRONMENT: "development"
+
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-auth_user}
+      DB_PASSWORD: ${DB_PASSWORD:-auth_password}
+      DB_NAME: ${DB_NAME:-auth_db}
+      DB_SSL_MODE: "disable"
+
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-key-change-this-in-production}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-http://localhost:3001/api/v1/auth/oauth/google/callback}
+
+      YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
+      YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
+      YANDEX_REDIRECT_URL: ${YANDEX_REDIRECT_URL:-http://localhost:3001/api/v1/auth/oauth/yandex/callback}
+
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - inbetwin-network
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./inbetwin-api-gateway/Dockerfile
+    container_name: inbetwin-api-gateway
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      ENVIRONMENT: "development"
+
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-key-change-this-in-production}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+
+      AUTH_SERVICE_URL: "http://auth-service:3001"
+      SOCIAL_SERVICE_URL: "http://mock-social:5678"
+      AGENT_SERVICE_URL: "http://mock-agent:5678"
+      LLM_SERVICE_URL: "http://mock-llm:5678"
+      RAG_SERVICE_URL: "http://mock-rag:5678"
+      LEAD_SCORING_SERVICE_URL: "http://mock-leads:5678"
+
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+
+      RATE_LIMIT_MAX: "100"
+      RATE_LIMIT_WINDOW: "60s"
+
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - inbetwin-network
+
+  # Mock Social Service
+  mock-social:
+    image: hashicorp/http-echo
+    container_name: mock-social
+    command: ["-text", '{"service": "social", "status": "ok"}']
+    networks:
+      - inbetwin-network
+
+  # Mock Agent Service
+  mock-agent:
+    image: hashicorp/http-echo
+    container_name: mock-agent
+    command: ["-text", '{"service": "agent", "status": "ok"}']
+    networks:
+      - inbetwin-network
+
+  # Mock LLM Service
+  mock-llm:
+    image: hashicorp/http-echo
+    container_name: mock-llm
+    command: ["-text", '{"service": "llm", "status": "ok"}']
+    networks:
+      - inbetwin-network
+
+  # Mock RAG Service
+  mock-rag:
+    image: hashicorp/http-echo
+    container_name: mock-rag
+    command: ["-text", '{"service": "rag", "status": "ok"}']
+    networks:
+      - inbetwin-network
+
+  # Mock Lead Scoring Service
+  mock-leads:
+    image: hashicorp/http-echo
+    container_name: mock-leads
+    command: ["-text", '{"service": "lead-scoring", "status": "ok"}']
+    networks:
+      - inbetwin-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+
+networks:
+  inbetwin-network:
+    driver: bridge
