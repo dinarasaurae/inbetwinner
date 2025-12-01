@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 	"github.com/valyala/fasthttp"
 )
 
@@ -72,9 +73,18 @@ func (s *Service) ProxyRequest(c fiber.Ctx, targetURL string) error {
 	}()
 
 	originalPath := c.Path()
-	servicePath := strings.TrimPrefix(originalPath, "/api/v1")
 
-	req.SetRequestURI(targetURL + servicePath)
+	// Для разных сервисов разная логика проксирования
+	var targetPath string
+	if strings.Contains(targetURL, "auth-service") {
+		// Auth Service ожидает полный путь /api/v1/auth/...
+		targetPath = originalPath
+	} else {
+		// Другие сервисы могут ожидать путь без /api/v1
+		targetPath = strings.TrimPrefix(originalPath, "/api/v1")
+	}
+
+	req.SetRequestURI(targetURL + targetPath)
 
 	if queryString := c.Request().URI().QueryString(); len(queryString) > 0 {
 		req.URI().SetQueryStringBytes(queryString)
@@ -96,7 +106,7 @@ func (s *Service) ProxyRequest(c fiber.Ctx, targetURL string) error {
 	req.Header.Set("X-Real-IP", c.IP())
 
 	if userID := c.Locals("userID"); userID != nil {
-		req.Header.Set("X-User-ID", userID.(string))
+		req.Header.Set("X-User-ID", userID.(uuid.UUID).String())
 	}
 
 	err := s.client.Do(req, resp)

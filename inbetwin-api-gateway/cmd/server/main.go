@@ -96,6 +96,11 @@ func main() {
 			return c.IP()
 		},
 
+		Next: func(c fiber.Ctx) bool {
+			// Пропускаем rate limiting для health checks и опций
+			return c.Path() == "/health" || c.Method() == "OPTIONS"
+		},
+
 		LimitReached: func(c fiber.Ctx) error {
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
 				"error":       "rate limit exceeded",

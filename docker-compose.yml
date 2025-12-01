@@ -126,8 +126,8 @@ services:
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
 
-      RATE_LIMIT_MAX: "100"
-      RATE_LIMIT_WINDOW: "60s"
+      RATE_LIMIT_MAX: "50"
+      RATE_LIMIT_WINDOW: "10s"
 
     ports:
       - "8080:8080"

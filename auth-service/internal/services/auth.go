@@ -44,6 +44,7 @@ func (s *AuthService) Register(req *models.CreateUserRequest) (*models.User, err
 		ID:               uuid.New(),
 		Email:            req.Email,
 		PasswordHash:     stringPtr(string(passwordHash)),
+		Name:             req.Name,        // добавлено поле name
 		FirstName:        req.FirstName,
 		LastName:         req.LastName,
 		EmailVerified:    false,
@@ -53,11 +54,11 @@ func (s *AuthService) Register(req *models.CreateUserRequest) (*models.User, err
 	}
 
 	query := `
-		INSERT INTO users (id, email, password_hash, first_name, last_name, email_verified, subscription_plan, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO users (id, email, password_hash, name, first_name, last_name, email_verified, subscription_plan, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 	_, err = s.db.Exec(query,
-		user.ID, user.Email, user.PasswordHash, user.FirstName, user.LastName,
+		user.ID, user.Email, user.PasswordHash, user.Name, user.FirstName, user.LastName,
 		user.EmailVerified, user.SubscriptionPlan, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -91,12 +92,12 @@ func (s *AuthService) Register(req *models.CreateUserRequest) (*models.User, err
 func (s *AuthService) Login(req *models.LoginRequest) (*models.User, string, string, error) {
 	user := &models.User{}
 	query := `
-		SELECT id, email, password_hash, first_name, last_name, avatar_url,
+		SELECT id, email, password_hash, name, first_name, last_name, avatar_url,
 		       email_verified, subscription_plan, created_at, updated_at
 		FROM users WHERE email = $1
 	`
 	err := s.db.QueryRow(query, req.Email).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &user.FirstName, &user.LastName,
+		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.FirstName, &user.LastName,
 		&user.AvatarURL, &user.EmailVerified, &user.SubscriptionPlan,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
@@ -169,12 +170,12 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, error) {
 func (s *AuthService) GetUserByID(userID uuid.UUID) (*models.User, error) {
 	user := &models.User{}
 	query := `
-		SELECT id, email, password_hash, first_name, last_name, avatar_url,
+		SELECT id, email, password_hash, name, first_name, last_name, avatar_url,
 		       email_verified, subscription_plan, created_at, updated_at
 		FROM users WHERE id = $1
 	`
 	err := s.db.QueryRow(query, userID).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &user.FirstName, &user.LastName,
+		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.FirstName, &user.LastName,
 		&user.AvatarURL, &user.EmailVerified, &user.SubscriptionPlan,
 		&user.CreatedAt, &user.UpdatedAt,
 	)

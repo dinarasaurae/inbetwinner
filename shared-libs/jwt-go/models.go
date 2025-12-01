@@ -5,14 +5,16 @@ import (
 )
 
 type APIResponse struct {
-	Success bool        `json:"success"`
+	Status  string      `json:"status"`          // изменено для интеграционных тестов
+	Success bool        `json:"success"`         // оставлено для обратной совместимости
 	Message string      `json:"message,omitempty"`
 	Data    interface{} `json:"data,omitempty"`
 	Error   string      `json:"error,omitempty"`
 }
 
 type AuthResponse struct {
-	Success      bool        `json:"success"`
+	Status       string      `json:"status"`          // добавлено для интеграционных тестов
+	Success      bool        `json:"success"`         // оставлено для обратной совместимости
 	Message      string      `json:"message,omitempty"`
 	AccessToken  string      `json:"access_token"`
 	RefreshToken string      `json:"refresh_token"`
@@ -21,13 +23,15 @@ type AuthResponse struct {
 }
 
 type RefreshTokenResponse struct {
-	Success     bool   `json:"success"`
+	Status      string `json:"status"`      // добавлено для интеграционных тестов
+	Success     bool   `json:"success"`     // оставлено для обратной совместимости
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
 }
 
 type ErrorResponse struct {
-	Success bool        `json:"success"`
+	Status  string      `json:"status"`          // изменено для интеграционных тестов
+	Success bool        `json:"success"`         // оставлено для обратной совместимости
 	Error   string      `json:"error"`
 	Details interface{} `json:"details,omitempty"`
 }
@@ -46,7 +50,8 @@ type UserInfo struct {
 
 func NewSuccessResponse(message string, data interface{}) APIResponse {
 	return APIResponse{
-		Success: true,
+		Status:  "success",        // добавлено для интеграционных тестов
+		Success: true,             // оставлено для обратной совместимости
 		Message: message,
 		Data:    data,
 	}
@@ -54,7 +59,8 @@ func NewSuccessResponse(message string, data interface{}) APIResponse {
 
 func NewErrorResponse(error string, details interface{}) ErrorResponse {
 	return ErrorResponse{
-		Success: false,
+		Status:  "error",          // добавлено для интеграционных тестов
+		Success: false,            // оставлено для обратной совместимости
 		Error:   error,
 		Details: details,
 	}
@@ -62,7 +68,8 @@ func NewErrorResponse(error string, details interface{}) ErrorResponse {
 
 func NewAuthResponse(accessToken, refreshToken string, expiresIn int, user interface{}, message string) AuthResponse {
 	return AuthResponse{
-		Success:      true,
+		Status:       "success",   // добавлено для интеграционных тестов
+		Success:      true,        // оставлено для обратной совместимости
 		Message:      message,
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
@@ -73,7 +80,8 @@ func NewAuthResponse(accessToken, refreshToken string, expiresIn int, user inter
 
 func NewRefreshTokenResponse(accessToken string, expiresIn int) RefreshTokenResponse {
 	return RefreshTokenResponse{
-		Success:     true,
+		Status:      "success",    // добавлено для интеграционных тестов
+		Success:     true,         // оставлено для обратной совместимости
 		AccessToken: accessToken,
 		ExpiresIn:   expiresIn,
 	}

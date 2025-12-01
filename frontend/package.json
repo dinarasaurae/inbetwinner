@@ -1,0 +1,21 @@
+{
+  "name": "inbetwin-frontend",
+  "version": "1.0.0",
+  "description": "Simple Vue.js frontend for testing inBeTwin APIs",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "vite preview --host 0.0.0.0 --port 3000"
+  },
+  "dependencies": {
+    "vue": "^3.4.0",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.0.0"
+  },
+  "type": "module"
+}
