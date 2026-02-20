@@ -55,3 +55,6 @@ Thumbs.db
 coverage.*
 *.cover
 *.prof
+
+# Frontend (moved to separate repository)
+frontend/
