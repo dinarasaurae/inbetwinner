@@ -43,6 +43,7 @@ logs/
 .idea/
 .vscode/
 *.iml
+.claude/
 
 # OS
 .DS_Store

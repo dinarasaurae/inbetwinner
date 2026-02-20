@@ -15,7 +15,7 @@ if [ $? -eq 0 ]; then
     if curl -s http://localhost:8080/health > /dev/null; then
         echo "API Gateway доступен"
 
-        if curl -s http://localhost:8081/health > /dev/null; then
+        if curl -s http://localhost:3001/health > /dev/null; then
             echo "Auth Service доступен"
             echo ""
             echo "Система готова к полному тестированию!"

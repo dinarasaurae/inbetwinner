@@ -129,10 +129,20 @@ func (h *AuthHandler) UpdateProfile(c fiber.Ctx) error {
 			"User not authenticated", nil))
 	}
 
-	// туду: реализовать обновление профиля
+	updatedUser, err := h.authService.UpdateUserProfile(userID, &req)
+	if err != nil {
+		if err.Error() == "at least one field is required" {
+			return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse(
+				err.Error(), nil))
+		}
+		if err.Error() == "user not found" {
+			return c.Status(fiber.StatusNotFound).JSON(jwtlib.NewErrorResponse(
+				err.Error(), nil))
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(jwtlib.NewErrorResponse(
+			"failed to update profile", err.Error()))
+	}
+
 	return c.JSON(jwtlib.NewSuccessResponse(
-		"Profile update not implemented yet", fiber.Map{
-			"user_id": userID,
-			"updates": req,
-		}))
+		"Profile updated successfully", updatedUser.ToResponse()))
 }

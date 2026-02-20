@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -28,7 +29,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer db.Close()
+	defer func(db *database.DB) {
+		err := db.Close()
+		if err != nil {
+
+		}
+	}(db)
 
 	if err := db.RunMigrations(); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
@@ -44,7 +50,8 @@ func main() {
 		ServerHeader: "inBeTwin-Auth",
 		ErrorHandler: func(c fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
-			if e, ok := err.(*fiber.Error); ok {
+			var e *fiber.Error
+			if errors.As(err, &e) {
 				code = e.Code
 			}
 

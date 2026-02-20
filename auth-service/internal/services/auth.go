@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,7 +45,7 @@ func (s *AuthService) Register(req *models.CreateUserRequest) (*models.User, err
 		ID:               uuid.New(),
 		Email:            req.Email,
 		PasswordHash:     stringPtr(string(passwordHash)),
-		Name:             req.Name,        // добавлено поле name
+		Name:             req.Name, // добавлено поле name
 		FirstName:        req.FirstName,
 		LastName:         req.LastName,
 		EmailVerified:    false,
@@ -178,6 +179,54 @@ func (s *AuthService) GetUserByID(userID uuid.UUID) (*models.User, error) {
 		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.FirstName, &user.LastName,
 		&user.AvatarURL, &user.EmailVerified, &user.SubscriptionPlan,
 		&user.CreatedAt, &user.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+
+	return user, nil
+}
+
+func (s *AuthService) UpdateUserProfile(userID uuid.UUID, req *models.UpdateUserRequest) (*models.User, error) {
+	if req.FirstName == nil && req.LastName == nil && req.AvatarURL == nil {
+		return nil, errors.New("at least one field is required")
+	}
+
+	// Keep `name` in sync for clients that still rely on a single full name field.
+	var computedName *string
+	first := ""
+	last := ""
+	if req.FirstName != nil {
+		first = strings.TrimSpace(*req.FirstName)
+	}
+	if req.LastName != nil {
+		last = strings.TrimSpace(*req.LastName)
+	}
+	full := strings.TrimSpace(strings.Join([]string{first, last}, " "))
+	if full != "" {
+		computedName = &full
+	}
+
+	query := `
+		UPDATE users
+		SET
+			first_name = COALESCE($2, first_name),
+			last_name = COALESCE($3, last_name),
+			avatar_url = COALESCE($4, avatar_url),
+			name = COALESCE($5, name),
+			updated_at = NOW()
+		WHERE id = $1
+		RETURNING id, email, password_hash, name, first_name, last_name, avatar_url,
+		          email_verified, subscription_plan, created_at, updated_at
+	`
+
+	user := &models.User{}
+	err := s.db.QueryRow(query, userID, req.FirstName, req.LastName, req.AvatarURL, computedName).Scan(
+		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.FirstName, &user.LastName,
+		&user.AvatarURL, &user.EmailVerified, &user.SubscriptionPlan, &user.CreatedAt, &user.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {

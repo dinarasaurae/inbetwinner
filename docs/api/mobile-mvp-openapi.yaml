@@ -1,0 +1,683 @@
+openapi: 3.0.3
+info:
+  title: inBeTwin Mobile MVP API
+  version: 0.1.0
+  description: |
+    API contract for current mobile screens in `inbetwin-kmm`.
+
+    Rules:
+    - Single entrypoint via API Gateway.
+    - All protected routes require `Authorization: Bearer <access_token>`.
+    - Response envelope for most endpoints: `status`, `success`, `message`, `data`.
+    - Auth login/refresh responses use current backend shape (top-level tokens).
+
+servers:
+  - url: http://localhost:8080
+    description: Local API Gateway
+  - url: http://10.0.2.2:8080
+    description: Android Emulator to local Gateway
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Health
+  - name: Auth
+  - name: Profile
+  - name: Agent
+  - name: Knowledge Base
+  - name: QA Pairs
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Gateway health check
+      security: []
+      responses:
+        '200':
+          description: Gateway is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayHealth'
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register user by email/password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and get token pair
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      description: |
+        Current backend returns only a new `access_token` and `expires_in`.
+        Client must keep previous refresh token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Access token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/auth/profile:
+    get:
+      tags: [Profile]
+      summary: Get current user profile
+      responses:
+        '200':
+          description: Profile returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessUserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [Profile]
+      summary: Update current user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/agent/history:
+    get:
+      tags: [Agent]
+      summary: Get agent action history for current user
+      description: Planned endpoint for `Agent History` mobile screen.
+      responses:
+        '200':
+          description: History list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessAgentHistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      x-status: planned
+
+  /api/v1/rag/documents:
+    get:
+      tags: [Knowledge Base]
+      summary: List uploaded documents
+      description: Planned endpoint for `Knowledge Base` screen.
+      parameters:
+        - in: query
+          name: namespace
+          schema:
+            type: string
+          required: false
+          description: Optional namespace filter
+      responses:
+        '200':
+          description: Document list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessDocumentListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      x-status: planned
+
+    post:
+      tags: [Knowledge Base]
+      summary: Upload document metadata
+      description: |
+        Planned metadata endpoint. Real file upload can be multipart or pre-signed URL flow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadDocumentRequest'
+      responses:
+        '201':
+          description: Document accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessDocumentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      x-status: planned
+
+  /api/v1/rag/qa-pairs:
+    get:
+      tags: [QA Pairs]
+      summary: List QA pairs
+      description: Planned endpoint for `QA Pairs` screen.
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+          required: false
+      responses:
+        '200':
+          description: QA list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessQaListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      x-status: planned
+
+    post:
+      tags: [QA Pairs]
+      summary: Create QA pair
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQaPairRequest'
+      responses:
+        '201':
+          description: QA created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessQaResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      x-status: planned
+
+  /api/v1/rag/qa-pairs/{qaId}:
+    put:
+      tags: [QA Pairs]
+      summary: Update QA pair
+      parameters:
+        - in: path
+          name: qaId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateQaPairRequest'
+      responses:
+        '200':
+          description: QA updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessQaResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-status: planned
+
+    delete:
+      tags: [QA Pairs]
+      summary: Delete QA pair
+      parameters:
+        - in: path
+          name: qaId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: QA deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-status: planned
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    GatewayHealth:
+      type: object
+      required: [status, redis, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        redis:
+          type: string
+          example: connected
+        service:
+          type: string
+          example: api-gateway
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 6
+        name:
+          type: string
+          nullable: true
+        first_name:
+          type: string
+          nullable: true
+        last_name:
+          type: string
+          nullable: true
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        first_name:
+          type: string
+          nullable: true
+        last_name:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          format: uri
+          nullable: true
+
+    UserProfile:
+      type: object
+      required: [id, email, email_verified, subscription_plan, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+        first_name:
+          type: string
+          nullable: true
+        last_name:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          nullable: true
+        email_verified:
+          type: boolean
+        subscription_plan:
+          type: string
+          enum: [free, pro, business]
+        created_at:
+          type: string
+          format: date-time
+
+    SuccessUserResponse:
+      type: object
+      required: [status, success, message, data]
+      properties:
+        status:
+          type: string
+          example: success
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/UserProfile'
+
+    LoginResponse:
+      type: object
+      required: [status, success, access_token, refresh_token, expires_in, user]
+      properties:
+        status:
+          type: string
+          example: success
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Login successful
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          example: 900
+        user:
+          $ref: '#/components/schemas/UserProfile'
+
+    RefreshResponse:
+      type: object
+      required: [status, success, access_token, expires_in]
+      properties:
+        status:
+          type: string
+          example: success
+        success:
+          type: boolean
+          example: true
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+          example: 900
+
+    ErrorResponse:
+      type: object
+      required: [status, success, error]
+      properties:
+        status:
+          type: string
+          example: error
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+        details:
+          nullable: true
+
+    AgentHistoryItem:
+      type: object
+      required: [id, title, description, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: Message Sent to Client
+        description:
+          type: string
+          example: Replied to John's inquiry about pricing
+        created_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [success, failed, pending]
+          default: success
+
+    SuccessAgentHistoryResponse:
+      type: object
+      required: [status, success, message, data]
+      properties:
+        status:
+          type: string
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentHistoryItem'
+
+    KnowledgeDocument:
+      type: object
+      required: [id, file_name, namespace, size_bytes, status, uploaded_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        file_name:
+          type: string
+        namespace:
+          type: string
+          example: marketing
+        size_bytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [processing, ready, failed]
+        uploaded_at:
+          type: string
+          format: date-time
+
+    UploadDocumentRequest:
+      type: object
+      required: [file_name, namespace]
+      properties:
+        file_name:
+          type: string
+        namespace:
+          type: string
+        content_type:
+          type: string
+          example: application/pdf
+        storage_key:
+          type: string
+          description: Optional object storage key if file already uploaded
+
+    SuccessDocumentResponse:
+      type: object
+      required: [status, success, message, data]
+      properties:
+        status:
+          type: string
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/KnowledgeDocument'
+
+    SuccessDocumentListResponse:
+      type: object
+      required: [status, success, message, data]
+      properties:
+        status:
+          type: string
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/KnowledgeDocument'
+
+    QaPair:
+      type: object
+      required: [id, question, answer, category, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        question:
+          type: string
+        answer:
+          type: string
+        category:
+          type: string
+          example: account
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateQaPairRequest:
+      type: object
+      required: [question, answer]
+      properties:
+        question:
+          type: string
+        answer:
+          type: string
+        category:
+          type: string
+          default: general
+
+    UpdateQaPairRequest:
+      type: object
+      properties:
+        question:
+          type: string
+        answer:
+          type: string
+        category:
+          type: string
+
+    SuccessQaResponse:
+      type: object
+      required: [status, success, message, data]
+      properties:
+        status:
+          type: string
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/QaPair'
+
+    SuccessQaListResponse:
+      type: object
+      required: [status, success, message, data]
+      properties:
+        status:
+          type: string
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/QaPair'
