@@ -1,6 +1,6 @@
 module github.com/dinarasaurae/inbetwin-auth-service
 
-go 1.21
+go 1.26
 
 require (
 	github.com/dinarasaurae/inbetwin-shared/jwt-go v0.0.0
