@@ -36,6 +36,11 @@ type Config struct {
 	TelegramAppHash string
 
 	EncryptionKey []byte // 32 bytes decoded from 64-char hex env var
+
+	// VK integration — register at https://vk.com/editapp
+	VKAppID       string
+	VKAppSecret   string
+	VKRedirectURI string // e.g. "inbetwin://vk-callback" registered in VK app settings
 }
 
 func Load() *Config {
@@ -69,6 +74,10 @@ func Load() *Config {
 		TelegramAppID:         parseTelegramAppID(getEnv("TELEGRAM_APP_ID", "0")),
 		TelegramAppHash:       getEnv("TELEGRAM_APP_HASH", ""),
 		EncryptionKey:         encKey,
+
+		VKAppID:       getEnv("VK_APP_ID", ""),
+		VKAppSecret:   getEnv("VK_APP_SECRET", ""),
+		VKRedirectURI: getEnv("VK_REDIRECT_URI", "inbetwin://vk-callback"),
 	}
 }
 

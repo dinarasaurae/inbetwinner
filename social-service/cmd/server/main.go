@@ -53,6 +53,12 @@ func main() {
 	telegramSvc := services.NewTelegramService(db, enc, cfg)
 	webhookSvc := services.NewWebhookService(db)
 
+	vkSvc := services.NewVKService(db, enc, cfg)
+	// Start Long Poll workers for all already-connected VK groups.
+	go vkSvc.StartAllWorkers(context.Background())
+
+	vkHandler := handlers.NewVKHandler(vkSvc)
+
 	// Init fetches bot info and optionally registers the webhook URL with Telegram.
 	if cfg.TelegramBotToken != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -137,6 +143,16 @@ func main() {
 	// Posting as the user.
 	tg.Post("/message", mtprotoHandler.SendMessage)
 	tg.Post("/reply", mtprotoHandler.ReplyToComment)
+
+	// ── VK (VKontakte) routes ────────────────────────────────────────────────
+	vk := social.Group("/vk")
+	vk.Get("/oauth/start", vkHandler.OAuthStart)
+	vk.Post("/oauth/exchange", vkHandler.OAuthExchange)
+	vk.Get("/groups", vkHandler.ListIntegrations)
+	vk.Delete("/disconnect", vkHandler.Disconnect)
+	vk.Post("/sync", vkHandler.SyncPosts)
+	vk.Post("/message", vkHandler.SendMessage)
+	vk.Get("/lead/:vk_user_id", vkHandler.EnrichLead)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
