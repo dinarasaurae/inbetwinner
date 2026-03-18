@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -60,7 +61,8 @@ func main() {
 
 		ErrorHandler: func(c fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
-			if e, ok := err.(*fiber.Error); ok {
+			var e *fiber.Error
+			if errors.As(err, &e) {
 				code = e.Code
 			}
 
@@ -116,6 +118,12 @@ func main() {
 	auth := api.Group("/auth")
 	auth.All("/*", func(c fiber.Ctx) error {
 		return proxyService.ProxyRequest(c, cfg.AuthServiceURL)
+	})
+
+	// Public webhook — Telegram calls this without a JWT.
+	// The social-service verifies the X-Telegram-Bot-Api-Secret-Token header internally.
+	api.Post("/social/telegram/webhook", func(c fiber.Ctx) error {
+		return proxyService.ProxyRequest(c, cfg.SocialServiceURL)
 	})
 
 	protected := api.Group("", jwtlib.AuthMiddleware(jwtService))
