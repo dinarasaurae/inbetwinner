@@ -110,6 +110,9 @@ func testUserCRUD(t *testing.T, db *sql.DB) {
 }
 
 func testRefreshTokenOperations(t *testing.T, db *sql.DB) {
+	// Clean up any expired tokens from previous runs
+	_, _ = db.Exec("DELETE FROM refresh_tokens WHERE expires_at < $1", time.Now())
+
 	userID := uuid.New()
 	testEmail := "test.token@example.com"
 

@@ -7,8 +7,12 @@ services:
       POSTGRES_USER: ${DB_USER:-auth_user}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-auth_password}
       POSTGRES_DB: ${DB_NAME:-auth_db}
+      SOCIAL_DB_USER: ${SOCIAL_DB_USER:-social_user}
+      SOCIAL_DB_PASSWORD: ${SOCIAL_DB_PASSWORD:-social_password}
+      SOCIAL_DB_NAME: ${SOCIAL_DB_NAME:-social_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
     ports:
       - "5432:5432"
     healthcheck:
@@ -116,7 +120,7 @@ services:
       JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
 
       AUTH_SERVICE_URL: "http://auth-service:3001"
-      SOCIAL_SERVICE_URL: "http://mock-social:5678"
+      SOCIAL_SERVICE_URL: "http://social-service:3002"
       AGENT_SERVICE_URL: "http://mock-agent:5678"
       LLM_SERVICE_URL: "http://mock-llm:5678"
       RAG_SERVICE_URL: "http://mock-rag:5678"
@@ -136,6 +140,8 @@ services:
         condition: service_healthy
       auth-service:
         condition: service_healthy
+      social-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -145,7 +151,51 @@ services:
     networks:
       - inbetwin-network
 
-  # Mock Social Service
+  social-service:
+    build:
+      context: .
+      dockerfile: ./social-service/Dockerfile
+    container_name: inbetwin-social-service
+    restart: unless-stopped
+    environment:
+      PORT: "3002"
+      ENVIRONMENT: "development"
+
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_USER: ${SOCIAL_DB_USER:-social_user}
+      DB_PASSWORD: ${SOCIAL_DB_PASSWORD:-social_password}
+      DB_NAME: ${SOCIAL_DB_NAME:-social_db}
+      DB_SSL_MODE: "disable"
+
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-key-change-this-in-production}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+
+      # MTProto credentials (my.telegram.org/apps)
+      TELEGRAM_APP_ID: ${TELEGRAM_APP_ID:-0}
+      TELEGRAM_APP_HASH: ${TELEGRAM_APP_HASH:-}
+
+    ports:
+      - "3002:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - inbetwin-network
+
+  # Mock Social Service (kept for reference, no longer used by gateway)
   mock-social:
     image: hashicorp/http-echo
     container_name: mock-social

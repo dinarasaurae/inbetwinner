@@ -1,0 +1,3 @@
+-- Extensions are shared and should not be dropped in production.
+-- DROP EXTENSION IF EXISTS "pgcrypto";
+-- DROP EXTENSION IF EXISTS "uuid-ossp";
