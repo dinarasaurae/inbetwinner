@@ -120,9 +120,19 @@ func main() {
 		return proxyService.ProxyRequest(c, cfg.AuthServiceURL)
 	})
 
-	// Public webhook — Telegram calls this without a JWT.
-	// The social-service verifies the X-Telegram-Bot-Api-Secret-Token header internally.
+	// ── Public routes — no JWT ───────────────────────────────────────────────
+
+	// Telegram webhook — verified by X-Telegram-Bot-Api-Secret-Token header downstream.
 	api.Post("/social/telegram/webhook", func(c fiber.Ctx) error {
+		return proxyService.ProxyRequest(c, cfg.SocialServiceURL)
+	})
+
+	// VK web OAuth callbacks — VK redirects the user's browser here.
+	// No JWT: user is identified via the state nonce stored in the social-service.
+	api.Get("/social/vk/oauth/user/callback", func(c fiber.Ctx) error {
+		return proxyService.ProxyRequest(c, cfg.SocialServiceURL)
+	})
+	api.Get("/social/vk/oauth/callback", func(c fiber.Ctx) error {
 		return proxyService.ProxyRequest(c, cfg.SocialServiceURL)
 	})
 

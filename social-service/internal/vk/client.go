@@ -105,6 +105,41 @@ func (c *Client) UsersGet(ctx context.Context, userIDs []int64) ([]User, error) 
 
 // ─── Groups ───────────────────────────────────────────────────────────────────
 
+// UsersGetMe fetches the current user's own profile (requires a user token).
+func (c *Client) UsersGetMe(ctx context.Context) (*User, error) {
+	p := url.Values{
+		"fields": {UserFields},
+	}
+	raw, err := c.call(ctx, "users.get", p)
+	if err != nil {
+		return nil, err
+	}
+	var users []User
+	if err := json.Unmarshal(raw, &users); err != nil || len(users) == 0 {
+		return nil, fmt.Errorf("vk: users.get returned empty response")
+	}
+	return &users[0], nil
+}
+
+// UsersGetSubscriptions returns the users and groups the authenticated user follows.
+// Returns an extended list (objects, not just IDs).
+func (c *Client) UsersGetSubscriptions(ctx context.Context, count int) (*SubscriptionsExtendedResponse, error) {
+	if count <= 0 || count > 200 {
+		count = 100
+	}
+	p := url.Values{
+		"extended": {"1"},
+		"count":    {strconv.Itoa(count)},
+		"fields":   {"photo_200,screen_name"},
+	}
+	raw, err := c.call(ctx, "users.getSubscriptions", p)
+	if err != nil {
+		return nil, err
+	}
+	var resp SubscriptionsExtendedResponse
+	return &resp, json.Unmarshal(raw, &resp)
+}
+
 // GroupsGetAdmin returns groups where the authenticated user is an administrator.
 func (c *Client) GroupsGetAdmin(ctx context.Context) ([]Group, error) {
 	p := url.Values{

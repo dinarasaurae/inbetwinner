@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -13,16 +14,94 @@ import (
 
 // VKHandler handles VK integration HTTP routes.
 type VKHandler struct {
-	svc *services.VKService
+	svc     *services.VKService
+	frontendURL string
 }
 
 // NewVKHandler creates a new VKHandler.
-func NewVKHandler(svc *services.VKService) *VKHandler {
-	return &VKHandler{svc: svc}
+func NewVKHandler(svc *services.VKService, frontendURL string) *VKHandler {
+	return &VKHandler{svc: svc, frontendURL: frontendURL}
 }
 
-// OAuthStart handles GET /social/vk/oauth/start?group_id={id}
-// Returns the VK authorization URL for the mobile app to open.
+// ─── User OAuth ───────────────────────────────────────────────────────────────
+
+// UserOAuthStart handles GET /social/vk/oauth/user/start?platform=web|android|ios
+// Returns the VK authorisation URL for the client to open.
+func (h *VKHandler) UserOAuthStart(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	platform := normalisePlatform(c.Query("platform"))
+
+	authURL, state, err := h.svc.UserOAuthStart(c.Context(), userID, platform)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(
+			jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("", models.VKUserOAuthStartResponse{
+		AuthURL:  authURL,
+		State:    state,
+		Platform: platform,
+	}))
+}
+
+// UserOAuthExchange handles POST /social/vk/oauth/user/exchange
+// Called by the mobile app after intercepting the VK deep-link redirect.
+func (h *VKHandler) UserOAuthExchange(c fiber.Ctx) error {
+	_, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	var req models.VKUserOAuthExchangeRequest
+	if err := c.Bind().JSON(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			jwtlib.NewErrorResponse("invalid_request", err.Error()))
+	}
+	if req.Code == "" || req.State == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			jwtlib.NewErrorResponse("invalid_request", "code and state are required"))
+	}
+
+	conn, err := h.svc.UserOAuthExchange(c.Context(), req.Code, req.State, normalisePlatform(req.Platform))
+	if err != nil {
+		return mapVKError(c, err)
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(jwtlib.NewSuccessResponse("vk_user_connected", conn))
+}
+
+// UserOAuthCallback handles GET /social/vk/oauth/user/callback   (PUBLIC — no JWT)
+// VK redirects the user's browser here after web OAuth.
+func (h *VKHandler) UserOAuthCallback(c fiber.Ctx) error {
+	code := c.Query("code")
+	state := c.Query("state")
+	errParam := c.Query("error")
+
+	if errParam != "" {
+		desc := c.Query("error_description")
+		return c.Redirect().To(fmt.Sprintf("%s/vk-error?reason=%s", h.frontendURL, desc))
+	}
+	if code == "" || state == "" {
+		return c.Redirect().To(h.frontendURL + "/vk-error?reason=missing_params")
+	}
+
+	_, err := h.svc.UserOAuthCallback(c.Context(), code, state)
+	if err != nil {
+		return c.Redirect().To(h.frontendURL + "/vk-error?reason=" + err.Error())
+	}
+
+	// After connecting the user account, redirect to the group-selection page.
+	return c.Redirect().To(h.frontendURL + "/dashboard/vk/groups")
+}
+
+// ─── Group OAuth ──────────────────────────────────────────────────────────────
+
+// OAuthStart handles GET /social/vk/oauth/start?group_id={id}&platform=web|android|ios
+// Returns the VK authorisation URL with group_ids so VK issues a community token.
 func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 	userID, ok := jwtlib.GetUserID(c)
 	if !ok {
@@ -36,20 +115,23 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 			jwtlib.NewErrorResponse("invalid_group_id", "group_id must be a positive integer"))
 	}
 
-	authURL, state, err := h.svc.OAuthStart(c.Context(), userID, groupID)
+	platform := normalisePlatform(c.Query("platform"))
+
+	authURL, state, err := h.svc.OAuthStart(c.Context(), userID, groupID, platform)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(
 			jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))
 	}
 
 	return c.JSON(jwtlib.NewSuccessResponse("", models.OAuthStartResponse{
-		AuthURL: authURL,
-		State:   state,
+		AuthURL:  authURL,
+		State:    state,
+		Platform: platform,
 	}))
 }
 
 // OAuthExchange handles POST /social/vk/oauth/exchange
-// Receives the code + state from the mobile app after the user authorizes.
+// Called by the mobile app to complete group OAuth.
 func (h *VKHandler) OAuthExchange(c fiber.Ctx) error {
 	_, ok := jwtlib.GetUserID(c)
 	if !ok {
@@ -71,11 +153,108 @@ func (h *VKHandler) OAuthExchange(c fiber.Ctx) error {
 		return mapVKError(c, err)
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(jwtlib.NewSuccessResponse("vk_connected", integ))
+	return c.Status(fiber.StatusCreated).JSON(jwtlib.NewSuccessResponse("vk_group_connected", integ))
 }
 
+// OAuthCallback handles GET /social/vk/oauth/callback   (PUBLIC — no JWT)
+// VK redirects the user's browser here after web group OAuth.
+func (h *VKHandler) OAuthCallback(c fiber.Ctx) error {
+	code := c.Query("code")
+	state := c.Query("state")
+	errParam := c.Query("error")
+
+	if errParam != "" {
+		desc := c.Query("error_description")
+		return c.Redirect().To(fmt.Sprintf("%s/vk-error?reason=%s", h.frontendURL, desc))
+	}
+	if code == "" || state == "" {
+		return c.Redirect().To(h.frontendURL + "/vk-error?reason=missing_params")
+	}
+
+	integ, err := h.svc.OAuthCallback(c.Context(), code, state)
+	if err != nil {
+		return c.Redirect().To(h.frontendURL + "/vk-error?reason=" + err.Error())
+	}
+
+	return c.Redirect().To(fmt.Sprintf(
+		"%s/dashboard/vk/groups?group_connected=%d", h.frontendURL, integ.GroupID,
+	))
+}
+
+// ─── Data endpoints ───────────────────────────────────────────────────────────
+
+// GetAdminGroups handles GET /social/vk/groups/admin
+// Lists VK groups where the authenticated user is admin.
+func (h *VKHandler) GetAdminGroups(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	groups, err := h.svc.GetAdminGroups(c.Context(), userID)
+	if err != nil {
+		return mapVKError(c, err)
+	}
+	if groups == nil {
+		groups = []models.VKAdminGroup{}
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("", fiber.Map{
+		"count":  len(groups),
+		"groups": groups,
+	}))
+}
+
+// GetUserProfile handles GET /social/vk/user/profile
+func (h *VKHandler) GetUserProfile(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	profile, err := h.svc.GetUserProfile(c.Context(), userID)
+	if err != nil {
+		return mapVKError(c, err)
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("", profile))
+}
+
+// GetUserSubscriptions handles GET /social/vk/user/subscriptions
+func (h *VKHandler) GetUserSubscriptions(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	subs, err := h.svc.GetUserSubscriptions(c.Context(), userID)
+	if err != nil {
+		return mapVKError(c, err)
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("", subs))
+}
+
+// GetUserPosts handles GET /social/vk/user/posts?count=50
+func (h *VKHandler) GetUserPosts(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	count, _ := strconv.Atoi(c.Query("count", "50"))
+
+	posts, err := h.svc.GetUserPosts(c.Context(), userID, count)
+	if err != nil {
+		return mapVKError(c, err)
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("", posts))
+}
+
+// ─── Connected groups & management ───────────────────────────────────────────
+
 // ListIntegrations handles GET /social/vk/groups
-// Returns all connected VK groups for the authenticated user.
 func (h *VKHandler) ListIntegrations(c fiber.Ctx) error {
 	userID, ok := jwtlib.GetUserID(c)
 	if !ok {
@@ -98,7 +277,6 @@ func (h *VKHandler) ListIntegrations(c fiber.Ctx) error {
 }
 
 // Disconnect handles DELETE /social/vk/disconnect
-// Deactivates a VK group integration.
 func (h *VKHandler) Disconnect(c fiber.Ctx) error {
 	userID, ok := jwtlib.GetUserID(c)
 	if !ok {
@@ -127,7 +305,6 @@ func (h *VKHandler) Disconnect(c fiber.Ctx) error {
 }
 
 // SyncPosts handles POST /social/vk/sync
-// Imports recent wall posts from the connected VK group.
 func (h *VKHandler) SyncPosts(c fiber.Ctx) error {
 	userID, ok := jwtlib.GetUserID(c)
 	if !ok {
@@ -155,7 +332,6 @@ func (h *VKHandler) SyncPosts(c fiber.Ctx) error {
 }
 
 // SendMessage handles POST /social/vk/message
-// Sends a DM to a lead from the connected VK group.
 func (h *VKHandler) SendMessage(c fiber.Ctx) error {
 	userID, ok := jwtlib.GetUserID(c)
 	if !ok {
@@ -186,7 +362,6 @@ func (h *VKHandler) SendMessage(c fiber.Ctx) error {
 }
 
 // EnrichLead handles GET /social/vk/lead/:vk_user_id
-// Fetches and/or refreshes the digital twin for a VK lead.
 func (h *VKHandler) EnrichLead(c fiber.Ctx) error {
 	userID, ok := jwtlib.GetUserID(c)
 	if !ok {
@@ -214,7 +389,18 @@ func (h *VKHandler) EnrichLead(c fiber.Ctx) error {
 	return c.JSON(jwtlib.NewSuccessResponse("", profile))
 }
 
-// ─── Error mapping ────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+func normalisePlatform(p string) string {
+	switch strings.ToLower(p) {
+	case "android":
+		return "android"
+	case "ios":
+		return "ios"
+	default:
+		return "web"
+	}
+}
 
 func mapVKError(c fiber.Ctx, err error) error {
 	msg := err.Error()
