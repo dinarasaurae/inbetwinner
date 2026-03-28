@@ -3,10 +3,12 @@ package services
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dinarasaurae/inbetwin-auth-service/internal/database"
@@ -18,6 +20,8 @@ type AuthService struct {
 	db         *database.DB
 	jwtService *jwtlib.Service
 }
+
+var ErrUserAlreadyExists = errors.New("user with this email already exists")
 
 func NewAuthService(db *database.DB, jwtService *jwtlib.Service) *AuthService {
 	return &AuthService{
@@ -33,7 +37,7 @@ func (s *AuthService) Register(req *models.CreateUserRequest) (*models.User, err
 		return nil, err
 	}
 	if exists {
-		return nil, errors.New("user with this email already exists")
+		return nil, ErrUserAlreadyExists
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -62,6 +66,10 @@ func (s *AuthService) Register(req *models.CreateUserRequest) (*models.User, err
 		user.ID, user.Email, user.PasswordHash, user.Name, user.FirstName, user.LastName,
 		user.EmailVerified, user.SubscriptionPlan, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return nil, ErrUserAlreadyExists
+		}
 		return nil, err
 	}
 
@@ -248,6 +256,58 @@ func (s *AuthService) saveRefreshToken(userID uuid.UUID, refreshToken, deviceInf
 	`
 	_, err := s.db.Exec(query, uuid.New(), userID, tokenHash, expiresAt, deviceInfo, time.Now())
 	return err
+}
+
+// LoginWithVKOAuth finds or creates a user for the given VK user ID and returns JWT tokens.
+func (s *AuthService) LoginWithVKOAuth(vkUserID int64, firstName, lastName, accessToken string) (string, string, error) {
+	providerUserID := fmt.Sprintf("%d", vkUserID)
+	email := fmt.Sprintf("vk_%d@vk.inbetwin.local", vkUserID)
+
+	// Try to find existing user via oauth_providers
+	var userID string
+	err := s.db.QueryRow(`
+		SELECT user_id FROM oauth_providers
+		WHERE provider = 'vk' AND provider_user_id = $1`, providerUserID).Scan(&userID)
+
+	if err != nil {
+		// Create new user
+		err = s.db.QueryRow(`
+			INSERT INTO users (email, password_hash, first_name, last_name)
+			VALUES ($1, NULL, $2, $3)
+			ON CONFLICT (email) DO UPDATE SET first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name
+			RETURNING id`, email, firstName, lastName).Scan(&userID)
+		if err != nil {
+			return "", "", fmt.Errorf("create user: %w", err)
+		}
+		// Save oauth_providers row
+		_, err = s.db.Exec(`
+			INSERT INTO oauth_providers (user_id, provider, provider_user_id, access_token)
+			VALUES ($1, 'vk', $2, $3)
+			ON CONFLICT (provider, provider_user_id) DO UPDATE SET access_token = EXCLUDED.access_token`,
+			userID, providerUserID, accessToken)
+		if err != nil {
+			return "", "", fmt.Errorf("save oauth provider: %w", err)
+		}
+	} else {
+		// Update token
+		_, _ = s.db.Exec(`UPDATE oauth_providers SET access_token = $1
+			WHERE provider = 'vk' AND provider_user_id = $2`, accessToken, providerUserID)
+	}
+
+	// Issue JWT
+	parsedID := uuid.MustParse(userID)
+	accessJWT, err := s.jwtService.GenerateAccessToken(parsedID, email, "free")
+	if err != nil {
+		return "", "", err
+	}
+	refreshJWT, err := s.jwtService.GenerateRefreshToken(parsedID)
+	if err != nil {
+		return "", "", err
+	}
+	if err := s.saveRefreshToken(parsedID, refreshJWT, "vk-oauth"); err != nil {
+		return "", "", err
+	}
+	return accessJWT, refreshJWT, nil
 }
 
 func stringPtr(s string) *string {
