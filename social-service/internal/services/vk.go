@@ -122,12 +122,12 @@ func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platfo
 	}
 	s.oauthMu.Unlock()
 
-	// VK ID OAuth 2.1 authorization URL
+	// VK ID OAuth 2.1 authorization URL (opened in browser/WebView)
 	// Scopes: vkid.personal_info (basic profile) + groups + wall + offline
 	authURL = fmt.Sprintf(
-		"%s/oauth2/auth?response_type=code&client_id=%s&redirect_uri=%s"+
+		"%s?response_type=code&client_id=%s&redirect_uri=%s"+
 			"&scope=%s&state=%s&code_challenge=%s&code_challenge_method=S256",
-		vkapi.VKIDBase,
+		vkapi.VKIDAuthURL,
 		url.QueryEscape(pc.AppID),
 		url.QueryEscape(pc.RedirectURI),
 		url.QueryEscape("vkid.personal_info groups wall offline"),
@@ -883,7 +883,7 @@ func (s *VKService) exchangeCodePKCE(ctx context.Context, code, deviceID, codeVe
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		vkapi.VKIDBase+"/oauth2/auth",
+		vkapi.VKIDTokenURL,
 		strings.NewReader(params.Encode()),
 	)
 	if err != nil {
