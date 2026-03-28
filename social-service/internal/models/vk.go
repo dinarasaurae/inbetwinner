@@ -6,6 +6,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// ─── Integrations ─────────────────────────────────────────────────────────────
+
+// VKUserConnection stores the user-level OAuth token obtained when the user
+// authorises inBeTwin in VK.  Used to list admin groups and scrape profile data.
+type VKUserConnection struct {
+	ID             uuid.UUID `json:"id"`
+	UserID         uuid.UUID `json:"user_id"`
+	VKUserID       int64     `json:"vk_user_id"`
+	Platform       string    `json:"platform"` // web | android | ios
+	AccessTokenEnc []byte    `json:"-"`
+	AccessTokenIV  []byte    `json:"-"`
+	Scope          string    `json:"scope"`
+	ConnectedAt    time.Time `json:"connected_at"`
+}
+
 // VKIntegration represents a connected VK community (group).
 type VKIntegration struct {
 	ID              uuid.UUID `json:"id"`
@@ -20,6 +35,8 @@ type VKIntegration struct {
 	IsActive        bool      `json:"is_active"`
 	ConnectedAt     time.Time `json:"connected_at"`
 }
+
+// ─── Data objects ─────────────────────────────────────────────────────────────
 
 // VKPost is a post from the connected VK group's wall.
 type VKPost struct {
@@ -74,17 +91,64 @@ type VKLeadProfile struct {
 	CreatedAt      time.Time  `json:"created_at"`
 }
 
-// ConnectVKRequest is sent by the mobile app to complete OAuth.
+// VKAdminGroup is returned when listing groups where the user is an admin,
+// before the group OAuth is completed.
+type VKAdminGroup struct {
+	GroupID      int64  `json:"group_id"`
+	Name         string `json:"name"`
+	ScreenName   string `json:"screen_name"`
+	Photo        string `json:"photo,omitempty"`
+	MembersCount int    `json:"members_count"`
+	// IsConnected is true when the group is already connected in inBeTwin.
+	IsConnected bool `json:"is_connected"`
+}
+
+// VKUserProfile is the authenticated user's own VK profile.
+type VKUserProfile struct {
+	VKUserID       int64  `json:"vk_user_id"`
+	FirstName      string `json:"first_name"`
+	LastName       string `json:"last_name"`
+	Sex            int    `json:"sex,omitempty"`
+	BDate          string `json:"bdate,omitempty"`
+	City           string `json:"city,omitempty"`
+	Country        string `json:"country,omitempty"`
+	About          string `json:"about,omitempty"`
+	Status         string `json:"status,omitempty"`
+	Domain         string `json:"domain,omitempty"`
+	PhotoURL       string `json:"photo_url,omitempty"`
+	FollowersCount int    `json:"followers_count"`
+	OccupationType string `json:"occupation_type,omitempty"`
+	OccupationName string `json:"occupation_name,omitempty"`
+}
+
+// ─── Request / Response DTOs ──────────────────────────────────────────────────
+
+// VKUserOAuthStartResponse is returned by GET /vk/oauth/user/start.
+type VKUserOAuthStartResponse struct {
+	AuthURL  string `json:"auth_url"`
+	State    string `json:"state"`
+	Platform string `json:"platform"`
+}
+
+// VKUserOAuthExchangeRequest is sent by the mobile app to complete user OAuth.
+type VKUserOAuthExchangeRequest struct {
+	Code     string `json:"code"`
+	State    string `json:"state"`
+	Platform string `json:"platform"` // android | ios
+}
+
+// ConnectVKRequest is sent by the mobile app to complete group OAuth.
 type ConnectVKRequest struct {
 	Code    string `json:"code"`
 	State   string `json:"state"`
 	GroupID int64  `json:"group_id"`
 }
 
-// OAuthStartResponse is returned by GET /vk/oauth/start.
+// OAuthStartResponse is returned by GET /vk/oauth/start (group OAuth).
 type OAuthStartResponse struct {
-	AuthURL string `json:"auth_url"`
-	State   string `json:"state"`
+	AuthURL  string `json:"auth_url"`
+	State    string `json:"state"`
+	Platform string `json:"platform"`
 }
 
 // SyncVKRequest requests a wall post import.

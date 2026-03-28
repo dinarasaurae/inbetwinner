@@ -39,7 +39,6 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
-	// Set up AES-256-GCM encryptor. Nil is tolerated in dev (warnings logged in config).
 	var enc *crypto.Encryptor
 	if len(cfg.EncryptionKey) == 32 {
 		enc, err = crypto.NewEncryptor(cfg.EncryptionKey)
@@ -54,12 +53,10 @@ func main() {
 	webhookSvc := services.NewWebhookService(db)
 
 	vkSvc := services.NewVKService(db, enc, cfg)
-	// Start Long Poll workers for all already-connected VK groups.
 	go vkSvc.StartAllWorkers(context.Background())
 
-	vkHandler := handlers.NewVKHandler(vkSvc)
+	vkHandler := handlers.NewVKHandler(vkSvc, cfg.FrontendURL)
 
-	// Init fetches bot info and optionally registers the webhook URL with Telegram.
 	if cfg.TelegramBotToken != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := telegramSvc.Init(ctx); err != nil {
@@ -70,7 +67,6 @@ func main() {
 		log.Println("WARNING: TELEGRAM_BOT_TOKEN not set — Telegram integration disabled")
 	}
 
-	// MTProto (userbot) service — acts as the authenticated user, not as a bot.
 	mtprotoSvc := mtproto.NewService(db, enc, cfg)
 	mtprotoHandler := handlers.NewMtprotoHandler(mtprotoSvc)
 
@@ -110,44 +106,55 @@ func main() {
 
 	api := app.Group("/api/v1")
 
-	// Public webhook route — no JWT, verified by X-Telegram-Bot-Api-Secret-Token header.
+	// ── Public routes (no JWT) ───────────────────────────────────────────────
+	// Telegram webhook — verified via X-Telegram-Bot-Api-Secret-Token header.
 	api.Post("/social/telegram/webhook", webhookHandler.Receive)
 
-	// All other /social routes require a valid JWT.
+	// VK web OAuth callbacks — browser is redirected here by VK after authorisation.
+	// No JWT: user is identified via the state nonce stored in VKService.
+	api.Get("/social/vk/oauth/user/callback", vkHandler.UserOAuthCallback)
+	api.Get("/social/vk/oauth/callback", vkHandler.OAuthCallback)
+
+	// ── Protected routes (JWT required) ─────────────────────────────────────
 	social := api.Group("/social", jwtlib.AuthMiddleware(jwtService))
 
 	tg := social.Group("/telegram")
 	tg.Post("/connect", telegramHandler.Connect)
 	tg.Delete("/disconnect", telegramHandler.Disconnect)
 	tg.Get("/status", telegramHandler.Status)
-
-	// /posts additionally requires an active consent record.
 	tg.Get("/posts",
 		middleware.RequireConsent(db, "telegram"),
 		telegramHandler.Posts,
 	)
 
-	// ── MTProto (userbot) routes ────────────────────────────────────────────
-	// These act as the authenticated user themselves — not as a bot.
-
-	// Phone-number auth flow (two-step: send-code → sign-in).
 	tgAuth := tg.Group("/auth")
 	tgAuth.Post("/send-code", mtprotoHandler.SendCode)
 	tgAuth.Post("/sign-in", mtprotoHandler.SignIn)
 	tgAuth.Delete("/sign-out", mtprotoHandler.SignOut)
 
-	// Channel management & history.
 	tg.Get("/channels", mtprotoHandler.GetChannels)
 	tg.Post("/sync", mtprotoHandler.Sync)
-
-	// Posting as the user.
 	tg.Post("/message", mtprotoHandler.SendMessage)
 	tg.Post("/reply", mtprotoHandler.ReplyToComment)
 
-	// ── VK (VKontakte) routes ────────────────────────────────────────────────
+	// ── VK routes ────────────────────────────────────────────────────────────
 	vk := social.Group("/vk")
+
+	// Step 1 — user OAuth (list admin groups, fetch profile/subscriptions)
+	vk.Get("/oauth/user/start", vkHandler.UserOAuthStart)
+	vk.Post("/oauth/user/exchange", vkHandler.UserOAuthExchange) // mobile only
+
+	// Step 2 — group OAuth (community token)
 	vk.Get("/oauth/start", vkHandler.OAuthStart)
-	vk.Post("/oauth/exchange", vkHandler.OAuthExchange)
+	vk.Post("/oauth/exchange", vkHandler.OAuthExchange) // mobile only
+
+	// User-level data
+	vk.Get("/groups/admin", vkHandler.GetAdminGroups)
+	vk.Get("/user/profile", vkHandler.GetUserProfile)
+	vk.Get("/user/subscriptions", vkHandler.GetUserSubscriptions)
+	vk.Get("/user/posts", vkHandler.GetUserPosts)
+
+	// Connected groups management
 	vk.Get("/groups", vkHandler.ListIntegrations)
 	vk.Delete("/disconnect", vkHandler.Disconnect)
 	vk.Post("/sync", vkHandler.SyncPosts)

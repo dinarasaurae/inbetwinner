@@ -126,6 +126,39 @@ type WallGetResponse struct {
 	Items []WallPost `json:"items"`
 }
 
+// ─── Subscriptions ────────────────────────────────────────────────────────────
+
+// SubscriptionsResponse is returned by users.getSubscriptions with extended=0.
+type SubscriptionsResponse struct {
+	Users  SubscriptionList `json:"users"`
+	Groups SubscriptionList `json:"groups"`
+}
+
+// SubscriptionsExtendedResponse is returned with extended=1 — mixed list of
+// users and groups the authenticated user follows.
+type SubscriptionsExtendedResponse struct {
+	Count int                    `json:"count"`
+	Items []SubscriptionItem     `json:"items"`
+}
+
+// SubscriptionList is a paginated list of IDs.
+type SubscriptionList struct {
+	Count int     `json:"count"`
+	Items []int64 `json:"items"`
+}
+
+// SubscriptionItem is one entry in the extended subscriptions list.
+// It can be either a user profile or a group/public page.
+type SubscriptionItem struct {
+	ID         int64  `json:"id"`
+	Type       string `json:"type"`        // "profile" | "group" | "page" | "event"
+	Name       string `json:"name"`        // group name (if type != "profile")
+	FirstName  string `json:"first_name"`  // user first name
+	LastName   string `json:"last_name"`   // user last name
+	ScreenName string `json:"screen_name"`
+	Photo200   string `json:"photo_200,omitempty"`
+}
+
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
 // MessageSendResponse is the message_id returned by messages.send.

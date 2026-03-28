@@ -10,6 +10,13 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// VKPlatformConfig bundles the credentials and redirect URI for one VK app.
+type VKPlatformConfig struct {
+	AppID       string
+	AppSecret   string
+	RedirectURI string
+}
+
 type Config struct {
 	Port        string
 	Environment string
@@ -37,10 +44,51 @@ type Config struct {
 
 	EncryptionKey []byte // 32 bytes decoded from 64-char hex env var
 
-	// VK integration — register at https://vk.com/editapp
-	VKAppID       string
-	VKAppSecret   string
-	VKRedirectURI string // e.g. "inbetwin://vk-callback" registered in VK app settings
+	// ── VK per-platform credentials ───────────────────────────────────────────
+	// Register apps at https://vk.com/editapp
+	// Web app (ID 54511648)
+	VKWebAppID      string
+	VKWebAppSecret  string
+	VKWebRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/user/callback
+
+	// Android app (ID 54511649)
+	VKAndroidAppID     string
+	VKAndroidAppSecret string
+
+	// iOS app (ID 54511650)
+	VKIOSAppID     string
+	VKIOSAppSecret string
+
+	// Mobile deep-link used by both Android and iOS
+	VKMobileRedirectURI string // inbetwin://vk-callback
+
+	// Frontend URL — browser is redirected here after web OAuth completes
+	FrontendURL string
+}
+
+// VKPlatform returns the VK credentials for the given platform ("web", "android", "ios").
+// Falls back to web config for unknown platforms.
+func (c *Config) VKPlatform(platform string) VKPlatformConfig {
+	switch platform {
+	case "android":
+		return VKPlatformConfig{
+			AppID:       c.VKAndroidAppID,
+			AppSecret:   c.VKAndroidAppSecret,
+			RedirectURI: c.VKMobileRedirectURI,
+		}
+	case "ios":
+		return VKPlatformConfig{
+			AppID:       c.VKIOSAppID,
+			AppSecret:   c.VKIOSAppSecret,
+			RedirectURI: c.VKMobileRedirectURI,
+		}
+	default: // "web"
+		return VKPlatformConfig{
+			AppID:       c.VKWebAppID,
+			AppSecret:   c.VKWebAppSecret,
+			RedirectURI: c.VKWebRedirectURI,
+		}
+	}
 }
 
 func Load() *Config {
@@ -75,9 +123,19 @@ func Load() *Config {
 		TelegramAppHash:       getEnv("TELEGRAM_APP_HASH", ""),
 		EncryptionKey:         encKey,
 
-		VKAppID:       getEnv("VK_APP_ID", ""),
-		VKAppSecret:   getEnv("VK_APP_SECRET", ""),
-		VKRedirectURI: getEnv("VK_REDIRECT_URI", "inbetwin://vk-callback"),
+		VKWebAppID:       getEnv("VK_APP_ID_WEB", "54511648"),
+		VKWebAppSecret:   getEnv("VK_APP_SECRET_WEB", ""),
+		VKWebRedirectURI: getEnv("VK_REDIRECT_URI_WEB", "http://localhost:3002/api/v1/social/vk/oauth/user/callback"),
+
+		VKAndroidAppID:     getEnv("VK_APP_ID_ANDROID", "54511649"),
+		VKAndroidAppSecret: getEnv("VK_APP_SECRET_ANDROID", ""),
+
+		VKIOSAppID:     getEnv("VK_APP_ID_IOS", "54511650"),
+		VKIOSAppSecret: getEnv("VK_APP_SECRET_IOS", ""),
+
+		VKMobileRedirectURI: getEnv("VK_REDIRECT_URI_MOBILE", "inbetwin://vk-callback"),
+
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 	}
 }
 
