@@ -44,6 +44,7 @@ func main() {
 	authService := services.NewAuthService(db, jwtService)
 
 	authHandler := handlers.NewAuthHandler(authService, jwtService)
+	vkAuthHandler := handlers.NewVKAuthHandler(authService, jwtService)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "inBeTwin Auth Service",
@@ -101,6 +102,7 @@ func main() {
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/refresh", authHandler.RefreshToken)
+	auth.Post("/vk", vkAuthHandler.LoginWithVK)
 
 	authProtected := auth.Group("", jwtlib.AuthMiddleware(jwtService))
 	authProtected.Get("/profile", authHandler.GetProfile)
