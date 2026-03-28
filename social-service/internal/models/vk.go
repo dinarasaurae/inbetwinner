@@ -125,15 +125,28 @@ type VKUserProfile struct {
 
 // VKUserOAuthStartResponse is returned by GET /vk/oauth/user/start.
 type VKUserOAuthStartResponse struct {
-	AuthURL  string `json:"auth_url"`
-	State    string `json:"state"`
-	Platform string `json:"platform"`
+	AuthURL      string `json:"auth_url"`
+	State        string `json:"state"`
+	Platform     string `json:"platform"`
+	ImplicitFlow bool   `json:"implicit_flow"` // true → response_type=token, no secret needed
 }
 
 // VKUserOAuthExchangeRequest is sent by the mobile app to complete user OAuth.
+//
+// Code flow  (response_type=code, AppSecret is set):
+//   Code + State + Platform → server exchanges code for token
+//
+// Implicit flow (response_type=token, AppSecret is empty):
+//   AccessToken + VKUserID + State + Platform → server stores token directly
 type VKUserOAuthExchangeRequest struct {
-	Code     string `json:"code"`
-	State    string `json:"state"`
+	// Code flow
+	Code  string `json:"code,omitempty"`
+	State string `json:"state"`
+
+	// Implicit flow (when AppSecret not configured)
+	AccessToken string `json:"access_token,omitempty"`
+	VKUserID    int64  `json:"vk_user_id,omitempty"`
+
 	Platform string `json:"platform"` // android | ios
 }
 

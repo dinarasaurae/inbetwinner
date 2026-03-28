@@ -84,13 +84,21 @@ func (s *VKService) cleanExpiredStates() {
 
 // UserOAuthStart generates a VK authorisation URL for the user-level flow.
 // platform: "web" | "android" | "ios"
-func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (string, string, error) {
+//
+// If AppSecret is empty the service automatically uses implicit flow
+// (response_type=token): VK returns the access_token directly in the redirect
+// URI fragment so no server-side code exchange — and no secret — is required.
+// The caller should check ImplicitFlow on the returned response to know which
+// exchange path to use.
+func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
 	pc := s.cfg.VKPlatform(platform)
 	if pc.AppID == "" {
-		return "", "", fmt.Errorf("VK app ID not configured for platform %q", platform)
+		return "", "", false, fmt.Errorf("VK app ID not configured for platform %q", platform)
 	}
 
-	state := s.newState()
+	implicit = pc.AppSecret == ""
+
+	state = s.newState()
 	s.oauthMu.Lock()
 	s.oauthStates[state] = pendingOAuth{
 		userID:   userID,
@@ -100,31 +108,46 @@ func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platfo
 	}
 	s.oauthMu.Unlock()
 
+	responseType := "code"
+	if implicit {
+		responseType = "token"
+	}
+
 	// Scopes: groups (list admin groups), wall (read posts), offline (no expiry)
-	authURL := fmt.Sprintf(
+	authURL = fmt.Sprintf(
 		"%s/authorize?client_id=%s&display=page&redirect_uri=%s"+
-			"&scope=groups,wall,offline&response_type=code&v=%s&state=%s",
+			"&scope=groups,wall,offline&response_type=%s&v=%s&state=%s",
 		vkapi.OAuthBase,
 		url.QueryEscape(pc.AppID),
 		url.QueryEscape(pc.RedirectURI),
+		responseType,
 		vkapi.APIVersion,
 		state,
 	)
-	return authURL, state, nil
+	return authURL, state, implicit, nil
 }
 
 // UserOAuthExchange is called by the mobile app after intercepting the deep-link
-// redirect from VK.  It exchanges the code and stores the user token.
-func (s *VKService) UserOAuthExchange(ctx context.Context, code, state, platform string) (*models.VKUserConnection, error) {
-	pending, ok := s.popState(state)
+// redirect from VK.
+//
+//   - Code flow (AppSecret configured): req.Code + req.State → server exchanges
+//   - Implicit flow (no AppSecret):     req.AccessToken + req.VKUserID + req.State → store directly
+func (s *VKService) UserOAuthExchange(ctx context.Context, req models.VKUserOAuthExchangeRequest) (*models.VKUserConnection, error) {
+	pending, ok := s.popState(req.State)
 	if !ok {
 		return nil, fmt.Errorf("invalid_state: OAuth state not found or expired")
 	}
-	// Mobile should always send the same platform it started with.
-	if platform != "" {
-		pending.platform = platform
+	if req.Platform != "" {
+		pending.platform = req.Platform
 	}
-	return s.finishUserOAuth(ctx, code, pending)
+
+	// Implicit flow — token arrived directly in the redirect URI fragment.
+	if req.AccessToken != "" {
+		return s.finishUserOAuthImplicit(ctx, req.AccessToken, req.VKUserID, pending)
+	}
+
+	// Code flow — exchange authorization code for token.
+	return s.finishUserOAuth(ctx, req.Code, pending)
 }
 
 // UserOAuthCallback is called by the server-side web callback
@@ -154,6 +177,51 @@ func (s *VKService) finishUserOAuth(ctx context.Context, code string, pending pe
 	fmt.Sscanf(vkUserIDStr, "%d", &vkUserID)
 
 	tokenEnc, tokenIV, err := s.encryptToken([]byte(userToken))
+	if err != nil {
+		return nil, err
+	}
+
+	conn := &models.VKUserConnection{
+		ID:             uuid.New(),
+		UserID:         pending.userID,
+		VKUserID:       vkUserID,
+		Platform:       pending.platform,
+		AccessTokenEnc: tokenEnc,
+		AccessTokenIV:  tokenIV,
+		Scope:          "groups,wall,offline",
+		ConnectedAt:    time.Now(),
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO vk_user_connections
+			(id, user_id, vk_user_id, platform,
+			 access_token_enc, access_token_iv, scope)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (user_id) DO UPDATE SET
+			vk_user_id       = EXCLUDED.vk_user_id,
+			platform         = EXCLUDED.platform,
+			access_token_enc = EXCLUDED.access_token_enc,
+			access_token_iv  = EXCLUDED.access_token_iv,
+			scope            = EXCLUDED.scope,
+			updated_at       = now()`,
+		conn.ID, conn.UserID, conn.VKUserID, conn.Platform,
+		conn.AccessTokenEnc, conn.AccessTokenIV, conn.Scope,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("save_user_connection: %w", err)
+	}
+
+	return conn, nil
+}
+
+// finishUserOAuthImplicit stores a token that arrived directly in the redirect
+// URI fragment (implicit flow, response_type=token). No code exchange needed.
+func (s *VKService) finishUserOAuthImplicit(ctx context.Context, accessToken string, vkUserID int64, pending pendingOAuth) (*models.VKUserConnection, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("implicit_flow: access_token is empty")
+	}
+
+	tokenEnc, tokenIV, err := s.encryptToken([]byte(accessToken))
 	if err != nil {
 		return nil, err
 	}
