@@ -62,13 +62,9 @@ func (h *VKHandler) UserOAuthExchange(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(
 			jwtlib.NewErrorResponse("invalid_request", err.Error()))
 	}
-	if req.State == "" {
+	if req.Code == "" || req.State == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "state is required"))
-	}
-	if req.Code == "" && req.AccessToken == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "code (code flow) or access_token (implicit flow) is required"))
+			jwtlib.NewErrorResponse("invalid_request", "code and state are required"))
 	}
 	req.Platform = normalisePlatform(req.Platform)
 
@@ -95,7 +91,8 @@ func (h *VKHandler) UserOAuthCallback(c fiber.Ctx) error {
 		return c.Redirect().To(h.frontendURL + "/vk-error?reason=missing_params")
 	}
 
-	_, err := h.svc.UserOAuthCallback(c.Context(), code, state)
+	deviceID := c.Query("device_id") // VK ID PKCE — returned alongside the code
+	_, err := h.svc.UserOAuthCallback(c.Context(), code, state, deviceID)
 	if err != nil {
 		return c.Redirect().To(h.frontendURL + "/vk-error?reason=" + err.Error())
 	}

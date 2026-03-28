@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -27,10 +29,11 @@ import (
 // ─── OAuth state store ────────────────────────────────────────────────────────
 
 type pendingOAuth struct {
-	userID   uuid.UUID
-	groupID  int64  // 0 for user OAuth, >0 for group OAuth
-	platform string // "web" | "android" | "ios"
-	expiry   time.Time
+	userID       uuid.UUID
+	groupID      int64  // 0 for user OAuth, >0 for group OAuth
+	platform     string // "web" | "android" | "ios"
+	codeVerifier string // PKCE — sent to VK ID during token exchange
+	expiry       time.Time
 }
 
 // ─── VKService ────────────────────────────────────────────────────────────────
@@ -82,56 +85,62 @@ func (s *VKService) cleanExpiredStates() {
 // Step 1 of connecting VK: user authorises the inBeTwin app.
 // After this we can list admin groups and fetch the user's own profile data.
 
-// UserOAuthStart generates a VK authorisation URL for the user-level flow.
+// UserOAuthStart generates a VK ID OAuth 2.1 authorisation URL (PKCE required).
 // platform: "web" | "android" | "ios"
 //
-// If AppSecret is empty the service automatically uses implicit flow
-// (response_type=token): VK returns the access_token directly in the redirect
-// URI fragment so no server-side code exchange — and no secret — is required.
-// The caller should check ImplicitFlow on the returned response to know which
-// exchange path to use.
+// VK ID OAuth 2.1 changes vs old oauth.vk.com:
+//   - Endpoint:       id.vk.ru/oauth2/auth
+//   - PKCE mandatory: code_challenge + code_challenge_method=S256
+//   - No client_secret needed (code_verifier replaces it in exchange)
+//   - Implicit flow removed (response_type=token no longer works)
+//   - device_id returned in callback, required for token exchange
 func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
 	pc := s.cfg.VKPlatform(platform)
 	if pc.AppID == "" {
 		return "", "", false, fmt.Errorf("VK app ID not configured for platform %q", platform)
 	}
 
-	implicit = pc.AppSecret == ""
+	// Generate PKCE code_verifier (43-128 chars, URL-safe base64)
+	verifierBytes := make([]byte, 32)
+	if _, err = rand.Read(verifierBytes); err != nil {
+		return "", "", false, fmt.Errorf("pkce verifier: %w", err)
+	}
+	codeVerifier := base64.RawURLEncoding.EncodeToString(verifierBytes)
+
+	// code_challenge = BASE64URL(SHA256(code_verifier)), no padding
+	h := sha256.Sum256([]byte(codeVerifier))
+	codeChallenge := base64.RawURLEncoding.EncodeToString(h[:])
 
 	state = s.newState()
 	s.oauthMu.Lock()
 	s.oauthStates[state] = pendingOAuth{
-		userID:   userID,
-		groupID:  0, // user OAuth — no group yet
-		platform: platform,
-		expiry:   time.Now().Add(10 * time.Minute),
+		userID:       userID,
+		groupID:      0,
+		platform:     platform,
+		codeVerifier: codeVerifier,
+		expiry:       time.Now().Add(15 * time.Minute),
 	}
 	s.oauthMu.Unlock()
 
-	responseType := "code"
-	if implicit {
-		responseType = "token"
-	}
-
-	// Scopes: groups (list admin groups), wall (read posts), offline (no expiry)
+	// VK ID OAuth 2.1 authorization URL
+	// Scopes: vkid.personal_info (basic profile) + groups + wall + offline
 	authURL = fmt.Sprintf(
-		"%s/authorize?client_id=%s&display=page&redirect_uri=%s"+
-			"&scope=groups,wall,offline&response_type=%s&v=%s&state=%s",
-		vkapi.OAuthBase,
+		"%s/oauth2/auth?response_type=code&client_id=%s&redirect_uri=%s"+
+			"&scope=%s&state=%s&code_challenge=%s&code_challenge_method=S256",
+		vkapi.VKIDBase,
 		url.QueryEscape(pc.AppID),
 		url.QueryEscape(pc.RedirectURI),
-		responseType,
-		vkapi.APIVersion,
+		url.QueryEscape("vkid.personal_info groups wall offline"),
 		state,
+		codeChallenge,
 	)
-	return authURL, state, implicit, nil
+	return authURL, state, false, nil
 }
 
 // UserOAuthExchange is called by the mobile app after intercepting the deep-link
 // redirect from VK.
 //
-//   - Code flow (AppSecret configured): req.Code + req.State → server exchanges
-//   - Implicit flow (no AppSecret):     req.AccessToken + req.VKUserID + req.State → store directly
+// VK ID OAuth 2.1: code + device_id (from callback) + code_verifier (PKCE, stored server-side)
 func (s *VKService) UserOAuthExchange(ctx context.Context, req models.VKUserOAuthExchangeRequest) (*models.VKUserConnection, error) {
 	pending, ok := s.popState(req.State)
 	if !ok {
@@ -140,30 +149,26 @@ func (s *VKService) UserOAuthExchange(ctx context.Context, req models.VKUserOAut
 	if req.Platform != "" {
 		pending.platform = req.Platform
 	}
-
-	// Implicit flow — token arrived directly in the redirect URI fragment.
-	if req.AccessToken != "" {
-		return s.finishUserOAuthImplicit(ctx, req.AccessToken, req.VKUserID, pending)
-	}
-
-	// Code flow — exchange authorization code for token.
-	return s.finishUserOAuth(ctx, req.Code, pending)
+	return s.finishUserOAuth(ctx, req.Code, req.DeviceID, pending)
 }
 
 // UserOAuthCallback is called by the server-side web callback
-// (VK redirects the browser here).  No JWT context — user is identified via state.
-func (s *VKService) UserOAuthCallback(ctx context.Context, code, state string) (*models.VKUserConnection, error) {
+// (VK redirects the browser here). device_id comes from the query param.
+func (s *VKService) UserOAuthCallback(ctx context.Context, code, state, deviceID string) (*models.VKUserConnection, error) {
 	pending, ok := s.popState(state)
 	if !ok {
 		return nil, fmt.Errorf("invalid_state: OAuth state not found or expired")
 	}
-	return s.finishUserOAuth(ctx, code, pending)
+	return s.finishUserOAuth(ctx, code, deviceID, pending)
 }
 
-func (s *VKService) finishUserOAuth(ctx context.Context, code string, pending pendingOAuth) (*models.VKUserConnection, error) {
+// finishUserOAuth exchanges the VK ID authorization code for an access token
+// using the PKCE flow (id.vk.ru/oauth2/auth, no client_secret needed).
+// deviceID is the VK-specific value returned in the redirect URI alongside the code.
+func (s *VKService) finishUserOAuth(ctx context.Context, code, deviceID string, pending pendingOAuth) (*models.VKUserConnection, error) {
 	pc := s.cfg.VKPlatform(pending.platform)
 
-	resp, err := s.exchangeCode(ctx, code, pc)
+	resp, err := s.exchangeCodePKCE(ctx, code, deviceID, pending.codeVerifier, pc)
 	if err != nil {
 		return nil, fmt.Errorf("token_exchange: %w", err)
 	}
@@ -172,6 +177,7 @@ func (s *VKService) finishUserOAuth(ctx context.Context, code string, pending pe
 	if userToken == "" {
 		return nil, fmt.Errorf("user_token_missing: no access_token in OAuth response")
 	}
+	// VK ID returns user_id inside the token JWT or as a separate field
 	vkUserIDStr := resp["user_id"]
 	var vkUserID int64
 	fmt.Sscanf(vkUserIDStr, "%d", &vkUserID)
@@ -860,7 +866,66 @@ func (s *VKService) loadIntegration(ctx context.Context, userID, integrationID u
 	return i, token, err
 }
 
-// exchangeCode calls the VK OAuth token endpoint and returns the raw response map.
+// exchangeCodePKCE exchanges a VK ID authorization code using PKCE.
+// Uses id.vk.ru/oauth2/auth — no client_secret needed, code_verifier replaces it.
+// deviceID is the VK-specific value returned alongside the code in the redirect.
+func (s *VKService) exchangeCodePKCE(ctx context.Context, code, deviceID, codeVerifier string, pc config.VKPlatformConfig) (map[string]string, error) {
+	params := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {pc.AppID},
+		"code":          {code},
+		"code_verifier": {codeVerifier},
+		"redirect_uri":  {pc.RedirectURI},
+		"state":         {""},
+	}
+	if deviceID != "" {
+		params.Set("device_id", deviceID)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		vkapi.VKIDBase+"/oauth2/auth",
+		strings.NewReader(params.Encode()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse token response: %w", err)
+	}
+	if errField, ok := result["error"]; ok {
+		var errMsg string
+		_ = json.Unmarshal(errField, &errMsg)
+		desc := ""
+		if d, ok := result["error_description"]; ok {
+			_ = json.Unmarshal(d, &desc)
+		}
+		return nil, fmt.Errorf("vk id oauth error: %s — %s", errMsg, desc)
+	}
+
+	flat := make(map[string]string)
+	for k, v := range result {
+		var sv string
+		if json.Unmarshal(v, &sv) == nil {
+			flat[k] = sv
+		} else {
+			flat[k] = string(v)
+		}
+	}
+	return flat, nil
+}
+
+// exchangeCode calls the legacy VK OAuth token endpoint (oauth.vk.com).
+// Used for group/community tokens only.
 func (s *VKService) exchangeCode(ctx context.Context, code string, pc config.VKPlatformConfig) (map[string]string, error) {
 	params := url.Values{
 		"client_id":     {pc.AppID},

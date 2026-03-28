@@ -130,13 +130,13 @@ func Load() *Config {
 
 		VKAndroidAppID:       getEnv("VK_APP_ID_ANDROID", "54511649"),
 		VKAndroidAppSecret:   getEnv("VK_APP_SECRET_ANDROID", ""),
-		// VK ID SDK scheme — format vk{clientId}://vk.ru (registered via vkidManifestPlaceholders)
-		VKAndroidRedirectURI: getEnv("VK_REDIRECT_URI_ANDROID", "vk54511649://vk.ru"),
+		// VK ID OAuth 2.1 redirect — vk{clientId}://vk.ru/blank.html
+		VKAndroidRedirectURI: getEnv("VK_REDIRECT_URI_ANDROID", "vk54511649://vk.ru/blank.html"),
 
 		VKIOSAppID:     getEnv("VK_APP_ID_IOS", "54511650"),
 		VKIOSAppSecret: getEnv("VK_APP_SECRET_IOS", ""),
-		// VK ID SDK scheme — format vk{clientId}://vk.ru (registered via CFBundleURLSchemes)
-		VKIOSRedirectURI: getEnv("VK_REDIRECT_URI_IOS", "vk54511650://vk.ru"),
+		// VK ID OAuth 2.1 redirect — vk{clientId}://vk.ru/blank.html
+		VKIOSRedirectURI: getEnv("VK_REDIRECT_URI_IOS", "vk54511650://vk.ru/blank.html"),
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 	}
