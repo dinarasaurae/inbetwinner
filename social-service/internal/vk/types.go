@@ -11,8 +11,13 @@ const APIVersion = "5.199"
 // APIBase is the VK API base URL.
 const APIBase = "https://api.vk.com/method"
 
-// VKIDBase is the VK ID OAuth 2.1 base URL (replaces oauth.vk.com).
-// VK ID requires PKCE and does not support implicit flow.
+// VKIDAuthURL is the browser-facing VK ID authorization endpoint (opens in browser/WebView).
+const VKIDAuthURL = "https://id.vk.com/authorize"
+
+// VKIDTokenURL is the server-side token exchange endpoint (POST, PKCE).
+const VKIDTokenURL = "https://id.vk.ru/oauth2/auth"
+
+// VKIDBase kept for backwards compat references.
 const VKIDBase = "https://id.vk.ru"
 
 // OAuthBase is kept for group/community token flow (oauth.vk.com/access_token).
