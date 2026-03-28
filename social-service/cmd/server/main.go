@@ -104,19 +104,16 @@ func main() {
 
 	app.Get("/health", healthHandler.Check)
 
-	api := app.Group("/api/v1")
-
-	// ── Public routes (no JWT) ───────────────────────────────────────────────
-	// Telegram webhook — verified via X-Telegram-Bot-Api-Secret-Token header.
-	api.Post("/social/telegram/webhook", webhookHandler.Receive)
+	// Gateway strips /api/v1 before proxying — social-service sees paths without that prefix.
+	app.Post("/social/telegram/webhook", webhookHandler.Receive)
 
 	// VK web OAuth callbacks — browser is redirected here by VK after authorisation.
 	// No JWT: user is identified via the state nonce stored in VKService.
-	api.Get("/social/vk/oauth/user/callback", vkHandler.UserOAuthCallback)
-	api.Get("/social/vk/oauth/callback", vkHandler.OAuthCallback)
+	app.Get("/social/vk/oauth/user/callback", vkHandler.UserOAuthCallback)
+	app.Get("/social/vk/oauth/callback", vkHandler.OAuthCallback)
 
 	// ── Protected routes (JWT required) ─────────────────────────────────────
-	social := api.Group("/social", jwtlib.AuthMiddleware(jwtService))
+	social := app.Group("/social", jwtlib.AuthMiddleware(jwtService))
 
 	tg := social.Group("/telegram")
 	tg.Post("/connect", telegramHandler.Connect)
