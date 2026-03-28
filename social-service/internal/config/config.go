@@ -52,15 +52,16 @@ type Config struct {
 	VKWebRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/user/callback
 
 	// Android app (ID 54511649)
-	VKAndroidAppID     string
-	VKAndroidAppSecret string
+	VKAndroidAppID      string
+	VKAndroidAppSecret  string
+	// VK ID SDK redirect: vk{clientId}://vk.ru — registered via vkidManifestPlaceholders in build.gradle
+	VKAndroidRedirectURI string
 
 	// iOS app (ID 54511650)
 	VKIOSAppID     string
 	VKIOSAppSecret string
-
-	// Mobile deep-link used by both Android and iOS
-	VKMobileRedirectURI string // inbetwin://vk-callback
+	// VK ID SDK redirect: vk{clientId}://vk.ru — registered via CFBundleURLSchemes in Info.plist
+	VKIOSRedirectURI string
 
 	// Frontend URL — browser is redirected here after web OAuth completes
 	FrontendURL string
@@ -74,13 +75,13 @@ func (c *Config) VKPlatform(platform string) VKPlatformConfig {
 		return VKPlatformConfig{
 			AppID:       c.VKAndroidAppID,
 			AppSecret:   c.VKAndroidAppSecret,
-			RedirectURI: c.VKMobileRedirectURI,
+			RedirectURI: c.VKAndroidRedirectURI,
 		}
 	case "ios":
 		return VKPlatformConfig{
 			AppID:       c.VKIOSAppID,
 			AppSecret:   c.VKIOSAppSecret,
-			RedirectURI: c.VKMobileRedirectURI,
+			RedirectURI: c.VKIOSRedirectURI,
 		}
 	default: // "web"
 		return VKPlatformConfig{
@@ -127,13 +128,15 @@ func Load() *Config {
 		VKWebAppSecret:   getEnv("VK_APP_SECRET_WEB", ""),
 		VKWebRedirectURI: getEnv("VK_REDIRECT_URI_WEB", "http://localhost:3002/api/v1/social/vk/oauth/user/callback"),
 
-		VKAndroidAppID:     getEnv("VK_APP_ID_ANDROID", "54511649"),
-		VKAndroidAppSecret: getEnv("VK_APP_SECRET_ANDROID", ""),
+		VKAndroidAppID:       getEnv("VK_APP_ID_ANDROID", "54511649"),
+		VKAndroidAppSecret:   getEnv("VK_APP_SECRET_ANDROID", ""),
+		// VK ID SDK scheme — format vk{clientId}://vk.ru (registered via vkidManifestPlaceholders)
+		VKAndroidRedirectURI: getEnv("VK_REDIRECT_URI_ANDROID", "vk54511649://vk.ru"),
 
 		VKIOSAppID:     getEnv("VK_APP_ID_IOS", "54511650"),
 		VKIOSAppSecret: getEnv("VK_APP_SECRET_IOS", ""),
-
-		VKMobileRedirectURI: getEnv("VK_REDIRECT_URI_MOBILE", "inbetwin://vk-callback"),
+		// VK ID SDK scheme — format vk{clientId}://vk.ru (registered via CFBundleURLSchemes)
+		VKIOSRedirectURI: getEnv("VK_REDIRECT_URI_IOS", "vk54511650://vk.ru"),
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 	}
