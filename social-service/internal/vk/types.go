@@ -11,7 +11,11 @@ const APIVersion = "5.199"
 // APIBase is the VK API base URL.
 const APIBase = "https://api.vk.com/method"
 
-// OAuthBase is the VK OAuth2 base URL.
+// VKIDBase is the VK ID OAuth 2.1 base URL (replaces oauth.vk.com).
+// VK ID requires PKCE and does not support implicit flow.
+const VKIDBase = "https://id.vk.ru"
+
+// OAuthBase is kept for group/community token flow (oauth.vk.com/access_token).
 const OAuthBase = "https://oauth.vk.com"
 
 // LongPollWait is used for Long Poll event polling (differs from main API).

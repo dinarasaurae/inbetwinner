@@ -133,21 +133,13 @@ type VKUserOAuthStartResponse struct {
 
 // VKUserOAuthExchangeRequest is sent by the mobile app to complete user OAuth.
 //
-// Code flow  (response_type=code, AppSecret is set):
-//   Code + State + Platform → server exchanges code for token
-//
-// Implicit flow (response_type=token, AppSecret is empty):
-//   AccessToken + VKUserID + State + Platform → server stores token directly
+// VK ID OAuth 2.1 (PKCE): code + state + device_id + platform
+// device_id is returned by VK in the redirect URI alongside the code.
 type VKUserOAuthExchangeRequest struct {
-	// Code flow
-	Code  string `json:"code,omitempty"`
-	State string `json:"state"`
-
-	// Implicit flow (when AppSecret not configured)
-	AccessToken string `json:"access_token,omitempty"`
-	VKUserID    int64  `json:"vk_user_id,omitempty"`
-
-	Platform string `json:"platform"` // android | ios
+	Code     string `json:"code"`
+	State    string `json:"state"`
+	DeviceID string `json:"device_id"`          // VK ID PKCE — returned in callback
+	Platform string `json:"platform"`            // android | ios
 }
 
 // ConnectVKRequest is sent by the mobile app to complete group OAuth.
