@@ -35,16 +35,17 @@ func (h *VKHandler) UserOAuthStart(c fiber.Ctx) error {
 
 	platform := normalisePlatform(c.Query("platform"))
 
-	authURL, state, err := h.svc.UserOAuthStart(c.Context(), userID, platform)
+	authURL, state, implicit, err := h.svc.UserOAuthStart(c.Context(), userID, platform)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(
 			jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))
 	}
 
 	return c.JSON(jwtlib.NewSuccessResponse("", models.VKUserOAuthStartResponse{
-		AuthURL:  authURL,
-		State:    state,
-		Platform: platform,
+		AuthURL:      authURL,
+		State:        state,
+		Platform:     platform,
+		ImplicitFlow: implicit,
 	}))
 }
 
@@ -61,12 +62,17 @@ func (h *VKHandler) UserOAuthExchange(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(
 			jwtlib.NewErrorResponse("invalid_request", err.Error()))
 	}
-	if req.Code == "" || req.State == "" {
+	if req.State == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "code and state are required"))
+			jwtlib.NewErrorResponse("invalid_request", "state is required"))
 	}
+	if req.Code == "" && req.AccessToken == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			jwtlib.NewErrorResponse("invalid_request", "code (code flow) or access_token (implicit flow) is required"))
+	}
+	req.Platform = normalisePlatform(req.Platform)
 
-	conn, err := h.svc.UserOAuthExchange(c.Context(), req.Code, req.State, normalisePlatform(req.Platform))
+	conn, err := h.svc.UserOAuthExchange(c.Context(), req)
 	if err != nil {
 		return mapVKError(c, err)
 	}
