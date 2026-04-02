@@ -42,10 +42,11 @@ type pendingOAuth struct {
 
 // VKService handles VK group integration lifecycle.
 type VKService struct {
-	db        *database.DB
-	enc       *crypto.Encryptor
-	cfg       *config.Config
-	llmClient *VKLLMClient // nil when LLM_SERVICE_URL is not configured
+	db            *database.DB
+	enc           *crypto.Encryptor
+	cfg           *config.Config
+	llmClient     *VKLLMClient       // nil when LLM_SERVICE_URL is not configured
+	draftProvider ChatCompletionProvider
 
 	// oauthStates stores short-lived CSRF nonces for all OAuth flows.
 	oauthMu     sync.Mutex
@@ -68,6 +69,7 @@ func NewVKService(db *database.DB, enc *crypto.Encryptor, cfg *config.Config) *V
 		enc:           enc,
 		cfg:           cfg,
 		llmClient:     llmClient,
+		draftProvider: NewChatCompletionProvider(cfg),
 		oauthStates:   make(map[string]pendingOAuth),
 		workerCancels: make(map[uuid.UUID]context.CancelFunc),
 	}
