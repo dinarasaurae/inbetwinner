@@ -18,6 +18,7 @@ import (
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/models"
 	agentsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/agent"
 	histsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/history"
+	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/llmprovider"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/tools"
 )
 
@@ -51,7 +52,7 @@ type runtimeParams struct {
 }
 
 // fallback defaults when no agent is configured.
-var defaultParams = runtimeParams{
+var staticDefaultParams = runtimeParams{
 	model:       "gpt-4o-mini",
 	temperature: 0.7,
 	maxTokens:   2000,
@@ -60,12 +61,32 @@ var defaultParams = runtimeParams{
 	namespaces:  nil,
 	systemPmt: `Ты умный AI-ассистент для B2B продаж. Отвечай на языке пользователя (по умолчанию русский).
 Помогай квалифицировать лидов, отвечать на вопросы о продукте, назначать встречи и сохранять контактные данные.
-Будь дружелюбным, профессиональным и конкретным.`,
+	Будь дружелюбным, профессиональным и конкретным.`,
+}
+
+func defaultRuntimeParams(cfg *config.Config) runtimeParams {
+	params := staticDefaultParams
+	if cfg == nil {
+		return params
+	}
+	if cfg.LLMModel != "" {
+		params.model = cfg.LLMModel
+	}
+	if cfg.LLMTemp != 0 {
+		params.temperature = cfg.LLMTemp
+	}
+	if cfg.LLMMaxTokens > 0 {
+		params.maxTokens = cfg.LLMMaxTokens
+	}
+	if cfg.HistorySize > 0 {
+		params.historySize = cfg.HistorySize
+	}
+	return params
 }
 
 // LLMService orchestrates the agentic tool-calling loop.
 type LLMService struct {
-	client      *openai.Client
+	provider    llmprovider.ChatCompletionProvider
 	history     *histsvc.Service
 	registry    *tools.Registry
 	dispatcher  *tools.Dispatcher
@@ -82,7 +103,7 @@ func NewLLMService(
 	agentClient *agentsvc.Client,
 ) *LLMService {
 	return &LLMService{
-		client:      openai.NewClient(cfg.OpenAIAPIKey),
+		provider:    llmprovider.NewChatCompletionProvider(cfg),
 		history:     hist,
 		registry:    reg,
 		dispatcher:  disp,
@@ -145,9 +166,9 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 			compReq.Tools = openAITools
 		}
 
-		resp, err := s.client.CreateChatCompletion(ctx, compReq)
+		resp, err := s.provider.CreateChatCompletion(ctx, compReq)
 		if err != nil {
-			return nil, fmt.Errorf("openai: %w", err)
+			return nil, fmt.Errorf("%s provider: %w", s.provider.Name(), err)
 		}
 		totalTokens += resp.Usage.TotalTokens
 
@@ -202,6 +223,7 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 // resolveAgentConfig fetches agent params + tool allowlist from agent-service.
 // On any error or missing agent it returns defaults (safe degradation).
 func (s *LLMService) resolveAgentConfig(ctx context.Context, req ChatRequest) (runtimeParams, *uuid.UUID, map[string]bool) {
+	defaultParams := defaultRuntimeParams(s.cfg)
 	if s.agentClient == nil {
 		return defaultParams, nil, nil
 	}
@@ -410,7 +432,7 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 	}
 
 	compReq := openai.ChatCompletionRequest{
-		Model: params.model,
+			Model: params.model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: req.Message},
@@ -421,9 +443,9 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 		ToolChoice:  "required",
 	}
 
-	resp, err := s.client.CreateChatCompletion(ctx, compReq)
+	resp, err := s.provider.CreateChatCompletion(ctx, compReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai social: %w", err)
+		return nil, fmt.Errorf("%s social provider: %w", s.provider.Name(), err)
 	}
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("openai social: no choices")

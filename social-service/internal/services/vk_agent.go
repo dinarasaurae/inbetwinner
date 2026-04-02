@@ -440,13 +440,12 @@ func (s *VKService) persistDraftWithObs(ctx context.Context, draft *models.VKRep
 }
 
 func (s *VKService) composeDraft(ctx context.Context, snapshot *models.VKBusinessSnapshot, settings *models.VKAgentSettings, userMessage string, decision intentDecision, knowledge []string) (string, string) {
-	if s.cfg.OpenAIAPIKey == "" {
+	if s.draftProvider == nil || s.cfg.LLMAPIKey == "" {
 		return templateDraft(snapshot, settings, userMessage, decision), "template"
 	}
-	client := openai.NewClient(s.cfg.OpenAIAPIKey)
 	systemPrompt := buildSystemPrompt(snapshot, settings, decision, knowledge)
-	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model: s.cfg.OpenAIModel,
+	resp, err := s.draftProvider.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model: s.cfg.LLMModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: userMessage},
@@ -461,7 +460,7 @@ func (s *VKService) composeDraft(ctx context.Context, snapshot *models.VKBusines
 	if text == "" {
 		return templateDraft(snapshot, settings, userMessage, decision), "template"
 	}
-	return text, "openai"
+	return text, s.draftProvider.Name()
 }
 
 func buildSystemPrompt(snapshot *models.VKBusinessSnapshot, settings *models.VKAgentSettings, decision intentDecision, knowledge []string) string {
