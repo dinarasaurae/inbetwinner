@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -82,23 +83,24 @@ func (h *VKHandler) UserOAuthCallback(c fiber.Ctx) error {
 	code := c.Query("code")
 	state := c.Query("state")
 	errParam := c.Query("error")
+	platform, _ := h.svc.OAuthPlatformForState(state)
 
 	if errParam != "" {
 		desc := c.Query("error_description")
-		return c.Redirect().To(fmt.Sprintf("%s/vk-error?reason=%s", h.frontendURL, desc))
+		return c.Redirect().To(userOAuthReturnURL(platform, state, "", desc, h.frontendURL))
 	}
 	if code == "" || state == "" {
-		return c.Redirect().To(h.frontendURL + "/vk-error?reason=missing_params")
+		return c.Redirect().To(userOAuthReturnURL(platform, state, "", "missing_params", h.frontendURL))
 	}
 
 	deviceID := c.Query("device_id") // VK ID PKCE — returned alongside the code
 	_, err := h.svc.UserOAuthCallback(c.Context(), code, state, deviceID)
 	if err != nil {
-		return c.Redirect().To(h.frontendURL + "/vk-error?reason=" + err.Error())
+		return c.Redirect().To(userOAuthReturnURL(platform, state, "", err.Error(), h.frontendURL))
 	}
 
 	// After connecting the user account, redirect to the group-selection page.
-	return c.Redirect().To(h.frontendURL + "/dashboard/vk/groups")
+	return c.Redirect().To(userOAuthReturnURL(platform, state, "1", "", h.frontendURL))
 }
 
 // ─── Group OAuth ──────────────────────────────────────────────────────────────
@@ -112,10 +114,22 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 	}
 
 	groupIDStr := c.Query("group_id")
-	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	groupRef := c.Query("group_ref")
+	var (
+		groupID int64
+		err error
+	)
+	if groupRef != "" {
+		groupID, err = h.svc.ResolveGroupRef(c.Context(), userID, groupRef)
+	} else {
+		groupID, err = strconv.ParseInt(groupIDStr, 10, 64)
+		if err == nil && groupID <= 0 {
+			err = fmt.Errorf("group_id must be a positive integer")
+		}
+	}
 	if err != nil || groupID <= 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_group_id", "group_id must be a positive integer"))
+			jwtlib.NewErrorResponse("invalid_group_id", "Provide group_id or group_ref"))
 	}
 
 	platform := normalisePlatform(c.Query("platform"))
@@ -130,6 +144,7 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 		AuthURL:  authURL,
 		State:    state,
 		Platform: platform,
+		GroupID:  groupID,
 	}))
 }
 
@@ -165,23 +180,73 @@ func (h *VKHandler) OAuthCallback(c fiber.Ctx) error {
 	code := c.Query("code")
 	state := c.Query("state")
 	errParam := c.Query("error")
+	platform, _ := h.svc.OAuthPlatformForState(state)
 
 	if errParam != "" {
 		desc := c.Query("error_description")
-		return c.Redirect().To(fmt.Sprintf("%s/vk-error?reason=%s", h.frontendURL, desc))
+		return c.Redirect().To(groupOAuthErrorReturnURL(platform, state, desc, h.frontendURL))
 	}
 	if code == "" || state == "" {
-		return c.Redirect().To(h.frontendURL + "/vk-error?reason=missing_params")
+		return c.Redirect().To(groupOAuthErrorReturnURL(platform, state, "missing_params", h.frontendURL))
 	}
 
-	integ, err := h.svc.OAuthCallback(c.Context(), code, state)
+	integ, platform, err := h.svc.OAuthCallback(c.Context(), code, state)
 	if err != nil {
-		return c.Redirect().To(h.frontendURL + "/vk-error?reason=" + err.Error())
+		return c.Redirect().To(groupOAuthErrorReturnURL(platform, state, err.Error(), h.frontendURL))
 	}
 
-	return c.Redirect().To(fmt.Sprintf(
-		"%s/dashboard/vk/groups?group_connected=%d", h.frontendURL, integ.GroupID,
-	))
+	return c.Redirect().To(groupOAuthReturnURL(platform, state, integ, h.frontendURL))
+}
+
+func userOAuthReturnURL(platform, state, connected, reason, frontendURL string) string {
+	switch normalisePlatform(platform) {
+	case "android":
+		if reason != "" {
+			return fmt.Sprintf("inbetwin://vk-callback?error=%s&state=%s", url.QueryEscape(reason), state)
+		}
+		return fmt.Sprintf("inbetwin://vk-callback?legacy_user_connected=%s&state=%s", connected, state)
+	case "ios":
+		if reason != "" {
+			return fmt.Sprintf("https://inbetwin.ru/vk-redirect?error=%s&state=%s", url.QueryEscape(reason), state)
+		}
+		return fmt.Sprintf("https://inbetwin.ru/vk-redirect?legacy_user_connected=%s&state=%s", connected, state)
+	default:
+		if reason != "" {
+			return fmt.Sprintf("%s/vk-error?reason=%s", frontendURL, reason)
+		}
+		return frontendURL + "/dashboard/vk/groups"
+	}
+}
+
+func groupOAuthReturnURL(platform, state string, integ *models.VKIntegration, frontendURL string) string {
+	switch normalisePlatform(platform) {
+	case "android":
+		return fmt.Sprintf(
+			"inbetwin://vk-callback?group_connected=1&state=%s&group_id=%d&integration_id=%s",
+			state, integ.GroupID, integ.ID.String(),
+		)
+	case "ios":
+		return fmt.Sprintf(
+			"https://inbetwin.ru/vk-redirect?group_connected=1&state=%s&group_id=%d&integration_id=%s",
+			state, integ.GroupID, integ.ID.String(),
+		)
+	default:
+		return fmt.Sprintf(
+			"%s/dashboard/vk/groups?group_connected=%d",
+			frontendURL, integ.GroupID,
+		)
+	}
+}
+
+func groupOAuthErrorReturnURL(platform, state, reason, frontendURL string) string {
+	switch normalisePlatform(platform) {
+	case "android":
+		return fmt.Sprintf("inbetwin://vk-callback?error=%s&state=%s", url.QueryEscape(reason), state)
+	case "ios":
+		return fmt.Sprintf("https://inbetwin.ru/vk-redirect?error=%s&state=%s", url.QueryEscape(reason), state)
+	default:
+		return fmt.Sprintf("%s/vk-error?reason=%s", frontendURL, reason)
+	}
 }
 
 // ─── Data endpoints ───────────────────────────────────────────────────────────
@@ -408,6 +473,8 @@ func normalisePlatform(p string) string {
 func mapVKError(c fiber.Ctx, err error) error {
 	msg := err.Error()
 	switch {
+	case strings.Contains(msg, "vk error 1051"):
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(jwtlib.NewErrorResponse("profile_type_unsupported", msg))
 	case strings.Contains(msg, "not_found"):
 		return c.Status(fiber.StatusNotFound).JSON(jwtlib.NewErrorResponse("not_found", msg))
 	case strings.Contains(msg, "unauthorized") || strings.Contains(msg, "invalid_state"):

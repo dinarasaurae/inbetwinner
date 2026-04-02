@@ -139,6 +139,7 @@ func main() {
 
 	// Step 1 — user OAuth (list admin groups, fetch profile/subscriptions)
 	vk.Get("/oauth/user/start", vkHandler.UserOAuthStart)
+	vk.Get("/oauth/user/legacy/start", vkHandler.UserLegacyOAuthStart)
 	vk.Post("/oauth/user/exchange", vkHandler.UserOAuthExchange) // mobile only
 
 	// Step 2 — group OAuth (community token)
@@ -150,11 +151,20 @@ func main() {
 	vk.Get("/user/profile", vkHandler.GetUserProfile)
 	vk.Get("/user/subscriptions", vkHandler.GetUserSubscriptions)
 	vk.Get("/user/posts", vkHandler.GetUserPosts)
+	vk.Get("/discovery/status", vkHandler.GetDiscoveryStatus)
+	vk.Get("/user/data-snapshot", vkHandler.GetUserDataSnapshot)
 
 	// Connected groups management
 	vk.Get("/groups", vkHandler.ListIntegrations)
 	vk.Delete("/disconnect", vkHandler.Disconnect)
 	vk.Post("/sync", vkHandler.SyncPosts)
+	vk.Post("/context/bootstrap", vkHandler.BootstrapContext)
+	vk.Get("/workspace", vkHandler.GetWorkspace)
+	vk.Get("/agent/settings", vkHandler.GetAgentSettings)
+	vk.Put("/agent/settings", vkHandler.UpdateAgentSettings)
+	vk.Get("/drafts", vkHandler.ListDrafts)
+	vk.Post("/drafts/generate", vkHandler.GenerateDraft)
+	vk.Post("/drafts/:draft_id/approve", vkHandler.ApproveDraft)
 	vk.Post("/message", vkHandler.SendMessage)
 	vk.Get("/lead/:vk_user_id", vkHandler.EnrichLead)
 

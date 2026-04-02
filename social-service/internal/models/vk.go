@@ -34,6 +34,10 @@ type VKIntegration struct {
 	LongPollTs      string    `json:"-"`
 	IsActive        bool      `json:"is_active"`
 	ConnectedAt     time.Time `json:"connected_at"`
+	PostsCount      int       `json:"posts_count,omitempty"`
+	MessageCount    int       `json:"message_count,omitempty"`
+	LeadCount       int       `json:"lead_count,omitempty"`
+	ContextReady    bool      `json:"context_ready,omitempty"`
 }
 
 // ─── Data objects ─────────────────────────────────────────────────────────────
@@ -154,6 +158,7 @@ type OAuthStartResponse struct {
 	AuthURL  string `json:"auth_url"`
 	State    string `json:"state"`
 	Platform string `json:"platform"`
+	GroupID  int64  `json:"group_id"`
 }
 
 // SyncVKRequest requests a wall post import.
