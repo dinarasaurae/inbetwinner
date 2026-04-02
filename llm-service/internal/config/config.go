@@ -20,10 +20,12 @@ type Config struct {
 	DBName     string
 	DBSSLMode  string
 
-	OpenAIAPIKey    string
-	OpenAIModel     string
-	OpenAITemp      float32
-	OpenAIMaxTokens int
+	LLMProvider  string
+	LLMAPIKey    string
+	LLMBaseURL   string
+	LLMModel     string
+	LLMTemp      float32
+	LLMMaxTokens int
 
 	GoogleClientID     string
 	GoogleClientSecret string
@@ -42,8 +44,8 @@ func Load() *Config {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file, using env vars")
 	}
-	temp, _ := strconv.ParseFloat(getEnv("OPENAI_TEMPERATURE", "0.7"), 32)
-	maxTok, _ := strconv.Atoi(getEnv("OPENAI_MAX_TOKENS", "2000"))
+	temp, _ := strconv.ParseFloat(getFirstEnv("0.7", "LLM_TEMPERATURE", "OPENAI_TEMPERATURE"), 32)
+	maxTok, _ := strconv.Atoi(getFirstEnv("2000", "LLM_MAX_TOKENS", "OPENAI_MAX_TOKENS"))
 	maxIter, _ := strconv.Atoi(getEnv("MAX_TOOL_ITERATIONS", "5"))
 	histSize, _ := strconv.Atoi(getEnv("HISTORY_SIZE", "20"))
 	return &Config{
@@ -56,10 +58,12 @@ func Load() *Config {
 		DBName:      getEnv("DB_NAME", "llm_db"),
 		DBSSLMode:   getEnv("DB_SSL_MODE", "disable"),
 
-		OpenAIAPIKey:    getEnv("OPENAI_API_KEY", ""),
-		OpenAIModel:     getEnv("OPENAI_MODEL", "gpt-4o-mini"),
-		OpenAITemp:      float32(temp),
-		OpenAIMaxTokens: maxTok,
+		LLMProvider:  getFirstEnv("openai", "LLM_PROVIDER"),
+		LLMAPIKey:    getFirstEnv("", "LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMBaseURL:   getFirstEnv("", "LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMModel:     getFirstEnv("gpt-4o-mini", "LLM_MODEL", "OPENAI_MODEL"),
+		LLMTemp:      float32(temp),
+		LLMMaxTokens: maxTok,
 
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
@@ -79,4 +83,13 @@ func getEnv(k, d string) string {
 		return v
 	}
 	return d
+}
+
+func getFirstEnv(defaultValue string, keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return defaultValue
 }
