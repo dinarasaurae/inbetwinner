@@ -2,7 +2,10 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -323,6 +326,234 @@ func TestOrchestrationMode_DefaultIsLegacy(t *testing.T) {
 	result := svc.dispatch(context.Background(), uuid.New(), "test")
 	if result != "legacy" {
 		t.Errorf("default mode should produce legacy path, got %q", result)
+	}
+}
+
+// ── Per-integration override ──────────────────────────────────────────────────
+
+// perIntegrationDispatcher mimics effectiveOrchestrationMode logic:
+// per-integration field beats the global env default.
+type perIntegrationDispatcher struct {
+	globalMode      string // simulates s.cfg.LLMOrchestrationMode
+	integrationMode string // simulates settings.OrchestrationMode (may be empty)
+	llm             orchClient
+}
+
+func (d *perIntegrationDispatcher) effectiveMode() string {
+	if d.integrationMode != "" {
+		return d.integrationMode
+	}
+	if d.globalMode != "" {
+		return d.globalMode
+	}
+	return "legacy"
+}
+
+func (d *perIntegrationDispatcher) dispatch(ctx context.Context, integrationID uuid.UUID, message string) string {
+	mode := d.effectiveMode()
+	switch mode {
+	case "llm_service":
+		if d.llm == nil {
+			return "legacy"
+		}
+		req := VKProcessRequest{
+			IntegrationID: integrationID.String(),
+			ChatUserID:    "42",
+			Platform:      "vk",
+			Message:       message,
+		}
+		dec, err := d.llm.ProcessVKMessage(ctx, uuid.New(), req)
+		if err != nil {
+			return "error"
+		}
+		return dec.Mode
+	case "hybrid":
+		if d.llm == nil {
+			return "legacy"
+		}
+		req := VKProcessRequest{
+			IntegrationID: integrationID.String(),
+			ChatUserID:    "42",
+			Platform:      "vk",
+			Message:       message,
+		}
+		dec, err := d.llm.ProcessVKMessage(ctx, uuid.New(), req)
+		if err != nil {
+			return "fallback_legacy"
+		}
+		return dec.Mode
+	default:
+		return "legacy"
+	}
+}
+
+// TestEffectiveOrchestrationMode_PerIntegrationOverridesGlobal verifies that
+// a per-integration orchestration_mode="llm_service" in vk_agent_settings
+// overrides the global env var LLM_ORCHESTRATION_MODE="legacy".
+func TestEffectiveOrchestrationMode_PerIntegrationOverridesGlobal(t *testing.T) {
+	agentID := uuid.New()
+	stub := &stubLLMClient{
+		decision: &models.VKOrchestrationDecision{
+			Mode:       "draft",
+			DraftText:  "Наш курс стоит 5000 руб.",
+			Confidence: 0.88,
+			AgentID:    &agentID,
+		},
+	}
+
+	d := &perIntegrationDispatcher{
+		globalMode:      "legacy",     // global = legacy
+		integrationMode: "llm_service", // but THIS integration overrides to llm_service
+		llm:             stub,
+	}
+
+	result := d.dispatch(context.Background(), uuid.New(), "Сколько стоит?")
+	if result != "draft" {
+		t.Errorf("expected per-integration override to win, got %q", result)
+	}
+	if !stub.called {
+		t.Error("expected llm client to be called via per-integration override")
+	}
+}
+
+// TestEffectiveOrchestrationMode_EmptyIntegrationUsesGlobal checks that when
+// per-integration mode is empty, the global mode is used.
+func TestEffectiveOrchestrationMode_EmptyIntegrationUsesGlobal(t *testing.T) {
+	stub := &stubLLMClient{
+		decision: &models.VKOrchestrationDecision{Mode: "auto_reply"},
+	}
+	d := &perIntegrationDispatcher{
+		globalMode:      "llm_service",
+		integrationMode: "", // not set — should fall through to global
+		llm:             stub,
+	}
+	result := d.dispatch(context.Background(), uuid.New(), "Привет!")
+	if result != "auto_reply" {
+		t.Errorf("expected global mode to apply when integration mode is empty, got %q", result)
+	}
+}
+
+// TestEffectiveOrchestrationMode_BothEmpty defaults to legacy.
+func TestEffectiveOrchestrationMode_BothEmpty(t *testing.T) {
+	d := &perIntegrationDispatcher{
+		globalMode:      "",
+		integrationMode: "",
+	}
+	result := d.dispatch(context.Background(), uuid.New(), "test")
+	if result != "legacy" {
+		t.Errorf("expected legacy when both modes are empty, got %q", result)
+	}
+}
+
+// TestEffectiveOrchestrationMode_IntegrationHybrid_GlobalLegacy confirms that
+// per-integration hybrid overrides global legacy and falls back on LLM error.
+func TestEffectiveOrchestrationMode_IntegrationHybrid_GlobalLegacy(t *testing.T) {
+	stub := &stubLLMClient{err: errors.New("llm-service unavailable")}
+	d := &perIntegrationDispatcher{
+		globalMode:      "legacy",
+		integrationMode: "hybrid",
+		llm:             stub,
+	}
+	result := d.dispatch(context.Background(), uuid.New(), "Вопрос")
+	if result != "fallback_legacy" {
+		t.Errorf("expected fallback_legacy from hybrid mode, got %q", result)
+	}
+	if !stub.called {
+		t.Error("expected llm client attempted before fallback")
+	}
+}
+
+// ── HTTP adapter boundary test ────────────────────────────────────────────────
+
+// TestVKLLMClient_HTTPAdapter spins up a minimal httptest server that mimics
+// the /llm/social/vk/process endpoint and verifies that VKLLMClient correctly
+// serialises the request and deserialises the response.
+func TestVKLLMClient_HTTPAdapter(t *testing.T) {
+	agentID := uuid.New()
+	want := models.VKOrchestrationDecision{
+		Mode:             "draft",
+		DraftText:        "Добро пожаловать!",
+		Confidence:       0.93,
+		Intent:           "greeting",
+		SafeIntent:       true,
+		Rationale:        "Обычное приветствие",
+		KnowledgeSnippets: []string{"Компания основана в 2020 году"},
+		UsedTools:        []string{},
+		PromptTokens:     80,
+		CompletionTokens: 30,
+		TokensUsed:       110,
+		AgentID:          &agentID,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// verify path and method
+		if r.URL.Path != "/llm/social/vk/process" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("unexpected method: %s", r.Method)
+		}
+		// verify request body contains the message
+		var body VKProcessRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		if body.Message == "" {
+			t.Error("message field missing in request")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(want); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewVKLLMClient(srv.URL)
+	req := VKProcessRequest{
+		IntegrationID: uuid.New().String(),
+		ChatUserID:    "777",
+		Platform:      "vk",
+		Message:       "Привет, расскажите о компании",
+	}
+
+	got, err := client.ProcessVKMessage(context.Background(), uuid.New(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Mode != want.Mode {
+		t.Errorf("mode: got %q, want %q", got.Mode, want.Mode)
+	}
+	if got.DraftText != want.DraftText {
+		t.Errorf("draft_text: got %q, want %q", got.DraftText, want.DraftText)
+	}
+	if got.TokensUsed != want.TokensUsed {
+		t.Errorf("tokens_used: got %d, want %d", got.TokensUsed, want.TokensUsed)
+	}
+	if got.AgentID == nil || *got.AgentID != agentID {
+		t.Error("agent_id mismatch")
+	}
+}
+
+// TestVKLLMClient_HTTPAdapter_ServerError checks that a 5xx response is
+// propagated as an error (not silently swallowed).
+func TestVKLLMClient_HTTPAdapter_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"internal server error"}`))
+	}))
+	defer srv.Close()
+
+	client := NewVKLLMClient(srv.URL)
+	req := VKProcessRequest{
+		IntegrationID: uuid.New().String(),
+		ChatUserID:    "1",
+		Platform:      "vk",
+		Message:       "test",
+	}
+	_, err := client.ProcessVKMessage(context.Background(), uuid.New(), req)
+	if err == nil {
+		t.Error("expected error from 500 response, got nil")
 	}
 }
 
