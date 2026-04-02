@@ -83,6 +83,40 @@ func main() {
 	// Social-service orchestration endpoint — not a generic chat endpoint.
 	llm.Post("/social/vk/process", socialH.ProcessVK)
 
+	// ── Startup diagnostics ──────────────────────────────────────────────────
+	{
+		provider := cfg.LLMProvider
+		if provider == "" {
+			provider = "openai"
+		}
+		baseURL := cfg.LLMBaseURL
+		if baseURL == "" {
+			switch provider {
+			case "groq":
+				baseURL = "https://api.groq.com/openai/v1"
+			case "openrouter":
+				baseURL = "https://openrouter.ai/api/v1"
+			case "huggingface":
+				baseURL = "https://router.huggingface.co/v1"
+			default:
+				baseURL = "https://api.openai.com/v1"
+			}
+		}
+		keyHint := "(not set)"
+		if cfg.LLMAPIKey != "" {
+			n := len(cfg.LLMAPIKey)
+			if n > 8 {
+				keyHint = cfg.LLMAPIKey[:4] + "…" + cfg.LLMAPIKey[n-4:]
+			} else {
+				keyHint = "(set)"
+			}
+		}
+		log.Printf("llm-service provider : %s", provider)
+		log.Printf("llm-service base URL : %s", baseURL)
+		log.Printf("llm-service model    : %s", cfg.LLMModel)
+		log.Printf("llm-service api key  : %s", keyHint)
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	go func() {

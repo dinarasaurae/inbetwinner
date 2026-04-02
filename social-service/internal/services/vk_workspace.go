@@ -278,10 +278,11 @@ func (s *VKService) fetchRecentMessages(ctx context.Context, integrationID uuid.
 	out := []models.VKWorkspaceMessage{}
 	for rows.Next() {
 		var item models.VKWorkspaceMessage
+		// All d.* fields come from a LEFT JOIN — they are NULL when no draft exists.
 		var draftID sql.NullString
-		var intent, status, source, draftText, rationale string
-		var conf float64
-		var safe bool
+		var intent, status, source, draftText, rationale sql.NullString
+		var conf sql.NullFloat64
+		var safe sql.NullBool
 		var snippetsRaw []byte
 		if err := rows.Scan(
 			&item.ID, &item.FromVKUserID, &item.Text, &item.IsIncoming, &item.IsProcessed, &item.ReceivedAt,
@@ -298,13 +299,13 @@ func (s *VKService) fetchRecentMessages(ctx context.Context, integrationID uuid.
 				IntegrationID:     integrationID,
 				InboundMessageID:  item.ID,
 				FromVKUserID:      item.FromVKUserID,
-				Intent:            intent,
-				Confidence:        conf,
-				SafeIntent:        safe,
-				Status:            models.VKDraftStatus(status),
-				Source:            source,
-				DraftText:         draftText,
-				Rationale:         rationale,
+				Intent:            intent.String,
+				Confidence:        conf.Float64,
+				SafeIntent:        safe.Bool,
+				Status:            models.VKDraftStatus(status.String),
+				Source:            source.String,
+				DraftText:         draftText.String,
+				Rationale:         rationale.String,
 				KnowledgeSnippets: snippets,
 			}
 		}
