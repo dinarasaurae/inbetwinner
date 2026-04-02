@@ -176,6 +176,24 @@ func (c *Client) GroupsGetByID(ctx context.Context, groupID int64) (*Group, erro
 	return &groups[0], nil
 }
 
+// GroupsGetByRef resolves a group by short name, full vk.com URL, or numeric reference
+// supported by groups.getById.
+func (c *Client) GroupsGetByRef(ctx context.Context, groupRef string) (*Group, error) {
+	p := url.Values{
+		"group_ids": {groupRef},
+		"fields":    {GroupFields},
+	}
+	raw, err := c.call(ctx, "groups.getById", p)
+	if err != nil {
+		return nil, err
+	}
+	var groups []Group
+	if err := json.Unmarshal(raw, &groups); err != nil || len(groups) == 0 {
+		return nil, fmt.Errorf("vk: group not found or parse error")
+	}
+	return &groups[0], nil
+}
+
 // ─── Wall ─────────────────────────────────────────────────────────────────────
 
 // WallGet fetches posts from the owner's wall (ownerID is negative for groups).

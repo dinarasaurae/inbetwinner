@@ -10,6 +10,7 @@ require (
 	github.com/gotd/td v0.140.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
+	github.com/sashabaranov/go-openai v1.28.1
 	go.uber.org/zap v1.27.1
 )
 

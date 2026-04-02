@@ -166,6 +166,8 @@ type SubscriptionItem struct {
 	LastName   string `json:"last_name"`   // user last name
 	ScreenName string `json:"screen_name"`
 	Photo200   string `json:"photo_200,omitempty"`
+	IsAdmin    int    `json:"is_admin,omitempty"`
+	AdminLevel int    `json:"admin_level,omitempty"`
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
