@@ -10,6 +10,18 @@ services:
       SOCIAL_DB_USER: ${SOCIAL_DB_USER:-social_user}
       SOCIAL_DB_PASSWORD: ${SOCIAL_DB_PASSWORD:-social_password}
       SOCIAL_DB_NAME: ${SOCIAL_DB_NAME:-social_db}
+      RAG_DB_USER: ${RAG_DB_USER:-rag_user}
+      RAG_DB_PASSWORD: ${RAG_DB_PASSWORD:-rag_password}
+      RAG_DB_NAME: ${RAG_DB_NAME:-rag_db}
+      LLM_DB_USER: ${LLM_DB_USER:-llm_user}
+      LLM_DB_PASSWORD: ${LLM_DB_PASSWORD:-llm_password}
+      LLM_DB_NAME: ${LLM_DB_NAME:-llm_db}
+      AGENT_DB_USER: ${AGENT_DB_USER:-agent_user}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD:-agent_password}
+      AGENT_DB_NAME: ${AGENT_DB_NAME:-agent_db}
+      LEADS_DB_USER: ${LEADS_DB_USER:-leads_user}
+      LEADS_DB_PASSWORD: ${LEADS_DB_PASSWORD:-leads_password}
+      LEADS_DB_NAME: ${LEADS_DB_NAME:-leads_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
@@ -105,52 +117,6 @@ services:
     networks:
       - inbetwin-network
 
-  api-gateway:
-    build:
-      context: .
-      dockerfile: ./inbetwin-api-gateway/Dockerfile
-    container_name: inbetwin-api-gateway
-    restart: unless-stopped
-    environment:
-      PORT: "8080"
-      ENVIRONMENT: "development"
-
-      JWT_SECRET: ${JWT_SECRET:-your-super-secret-key-change-this-in-production}
-      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
-      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
-
-      AUTH_SERVICE_URL: "http://auth-service:3001"
-      SOCIAL_SERVICE_URL: "http://social-service:3002"
-      AGENT_SERVICE_URL: "http://mock-agent:5678"
-      LLM_SERVICE_URL: "http://mock-llm:5678"
-      RAG_SERVICE_URL: "http://mock-rag:5678"
-      LEAD_SCORING_SERVICE_URL: "http://mock-leads:5678"
-
-      REDIS_ADDR: "redis:6379"
-      REDIS_PASSWORD: ""
-      REDIS_DB: "0"
-
-      RATE_LIMIT_MAX: "50"
-      RATE_LIMIT_WINDOW: "10s"
-
-    ports:
-      - "8080:8080"
-    depends_on:
-      redis:
-        condition: service_healthy
-      auth-service:
-        condition: service_healthy
-      social-service:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - inbetwin-network
-
   social-service:
     build:
       context: .
@@ -177,14 +143,24 @@ services:
       TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
 
-      # MTProto credentials (my.telegram.org/apps)
       TELEGRAM_APP_ID: ${TELEGRAM_APP_ID:-0}
       TELEGRAM_APP_HASH: ${TELEGRAM_APP_HASH:-}
 
-      # VK integration (vk.com/editapp)
-      VK_APP_ID: ${VK_APP_ID:-}
-      VK_APP_SECRET: ${VK_APP_SECRET:-}
-      VK_REDIRECT_URI: ${VK_REDIRECT_URI:-inbetwin://vk-callback}
+      VK_APP_ID_WEB: ${VK_APP_ID_WEB:-54511648}
+      VK_APP_SECRET_WEB: ${VK_APP_SECRET_WEB:-}
+      VK_REDIRECT_URI_WEB: ${VK_REDIRECT_URI_WEB:-http://localhost:3002/api/v1/social/vk/oauth/user/callback}
+      VK_REDIRECT_URI_GROUP: ${VK_REDIRECT_URI_GROUP:-http://localhost:3002/api/v1/social/vk/oauth/callback}
+      VK_APP_ID_ANDROID: ${VK_APP_ID_ANDROID:-54511649}
+      VK_APP_SECRET_ANDROID: ${VK_APP_SECRET_ANDROID:-}
+      VK_REDIRECT_URI_ANDROID: ${VK_REDIRECT_URI_ANDROID:-vk54511649://vk.ru/blank.html}
+      VK_APP_ID_IOS: ${VK_APP_ID_IOS:-54511650}
+      VK_APP_SECRET_IOS: ${VK_APP_SECRET_IOS:-}
+      VK_REDIRECT_URI_IOS: ${VK_REDIRECT_URI_IOS:-vk54511650://vk.ru/blank.html}
+
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      RAG_SERVICE_URL: "http://rag-service:3004"
 
     ports:
       - "3002:3002"
@@ -200,43 +176,210 @@ services:
     networks:
       - inbetwin-network
 
-  # Mock Social Service (kept for reference, no longer used by gateway)
-  mock-social:
-    image: hashicorp/http-echo
-    container_name: mock-social
-    command: ["-text", '{"service": "social", "status": "ok"}']
+  agent-service:
+    build:
+      context: .
+      dockerfile: ./agent-service/Dockerfile
+    container_name: inbetwin-agent-service
+    restart: unless-stopped
+    environment:
+      PORT: "3003"
+      ENVIRONMENT: "development"
+
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_USER: ${AGENT_DB_USER:-agent_user}
+      DB_PASSWORD: ${AGENT_DB_PASSWORD:-agent_password}
+      DB_NAME: ${AGENT_DB_NAME:-agent_db}
+      DB_SSL_MODE: "disable"
+
+    ports:
+      - "3003:3003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - inbetwin-network
 
-  # Mock Agent Service
-  mock-agent:
-    image: hashicorp/http-echo
-    container_name: mock-agent
-    command: ["-text", '{"service": "agent", "status": "ok"}']
+  rag-service:
+    build:
+      context: .
+      dockerfile: ./rag-service/Dockerfile
+    container_name: inbetwin-rag-service
+    restart: unless-stopped
+    environment:
+      PORT: "3004"
+      ENVIRONMENT: "development"
+
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_USER: ${RAG_DB_USER:-rag_user}
+      DB_PASSWORD: ${RAG_DB_PASSWORD:-rag_password}
+      DB_NAME: ${RAG_DB_NAME:-rag_db}
+      DB_SSL_MODE: "disable"
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+
+      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+      PINECONE_HOST: ${PINECONE_HOST:-}
+
+      GOOGLE_SHEETS_API_KEY: ${GOOGLE_SHEETS_API_KEY:-}
+
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_VECTOR_WEIGHT: ${RAG_VECTOR_WEIGHT:-0.6}
+      RAG_TEXT_WEIGHT: ${RAG_TEXT_WEIGHT:-0.4}
+
+    ports:
+      - "3004:3004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - inbetwin-network
 
-  # Mock LLM Service
-  mock-llm:
-    image: hashicorp/http-echo
-    container_name: mock-llm
-    command: ["-text", '{"service": "llm", "status": "ok"}']
+  llm-service:
+    build:
+      context: .
+      dockerfile: ./llm-service/Dockerfile
+    container_name: inbetwin-llm-service
+    restart: unless-stopped
+    environment:
+      PORT: "3005"
+      ENVIRONMENT: "development"
+
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_USER: ${LLM_DB_USER:-llm_user}
+      DB_PASSWORD: ${LLM_DB_PASSWORD:-llm_password}
+      DB_NAME: ${LLM_DB_NAME:-llm_db}
+      DB_SSL_MODE: "disable"
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      MAX_TOOL_ITERATIONS: ${MAX_TOOL_ITERATIONS:-5}
+      HISTORY_LIMIT: ${HISTORY_LIMIT:-20}
+
+      RAG_SERVICE_URL: "http://rag-service:3004"
+      AGENT_SERVICE_URL: "http://agent-service:3003"
+
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL_CALENDAR:-http://localhost:3005/llm/google/callback}
+
+    ports:
+      - "3005:3005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - inbetwin-network
 
-  # Mock RAG Service
-  mock-rag:
-    image: hashicorp/http-echo
-    container_name: mock-rag
-    command: ["-text", '{"service": "rag", "status": "ok"}']
+  lead-scoring-service:
+    build:
+      context: .
+      dockerfile: ./lead-scoring-service/Dockerfile
+    container_name: inbetwin-lead-scoring-service
+    restart: unless-stopped
+    environment:
+      PORT: "3006"
+      ENVIRONMENT: "development"
+
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_USER: ${LEADS_DB_USER:-leads_user}
+      DB_PASSWORD: ${LEADS_DB_PASSWORD:-leads_password}
+      DB_NAME: ${LEADS_DB_NAME:-leads_db}
+      DB_SSL_MODE: "disable"
+
+      HOT_LEAD_THRESHOLD: ${HOT_LEAD_THRESHOLD:-80}
+      NOTIFICATIONS_URL: ${NOTIFICATIONS_URL:-}
+
+    ports:
+      - "3006:3006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3006/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - inbetwin-network
 
-  # Mock Lead Scoring Service
-  mock-leads:
-    image: hashicorp/http-echo
-    container_name: mock-leads
-    command: ["-text", '{"service": "lead-scoring", "status": "ok"}']
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./inbetwin-api-gateway/Dockerfile
+    container_name: inbetwin-api-gateway
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      ENVIRONMENT: "development"
+
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-key-change-this-in-production}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+
+      AUTH_SERVICE_URL: "http://auth-service:3001"
+      SOCIAL_SERVICE_URL: "http://social-service:3002"
+      AGENT_SERVICE_URL: "http://agent-service:3003"
+      RAG_SERVICE_URL: "http://rag-service:3004"
+      LLM_SERVICE_URL: "http://llm-service:3005"
+      LEAD_SCORING_SERVICE_URL: "http://lead-scoring-service:3006"
+
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+
+      RATE_LIMIT_MAX: "50"
+      RATE_LIMIT_WINDOW: "10s"
+
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      social-service:
+        condition: service_healthy
+      agent-service:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+      llm-service:
+        condition: service_healthy
+      lead-scoring-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - inbetwin-network
 
