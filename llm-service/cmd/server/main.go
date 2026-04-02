@@ -18,6 +18,7 @@ import (
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/database"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/handlers"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/middleware"
+	agentsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/agent"
 	calendarsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/calendar"
 	histsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/history"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/services"
@@ -41,7 +42,8 @@ func main() {
 	registry := tools.NewRegistry(db)
 	builtinH := tools.NewBuiltinHandler(calService, db)
 	dispatcher := tools.NewDispatcher(db, builtinH, registry)
-	llmService := services.NewLLMService(cfg, histService, registry, dispatcher)
+	agentClient := agentsvc.NewClient(cfg.AgentServiceURL)
+	llmService := services.NewLLMService(cfg, histService, registry, dispatcher, agentClient)
 	toolService := services.NewToolService(db)
 
 	chatH := handlers.NewChatHandler(llmService, histService)
