@@ -50,6 +50,8 @@ type Config struct {
 	VKWebAppID      string
 	VKWebAppSecret  string
 	VKWebRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/user/callback
+	// Separate public HTTPS callback for community OAuth via oauth.vk.com.
+	VKGroupRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/callback
 
 	// Android app (ID 54511649)
 	VKAndroidAppID      string
@@ -65,6 +67,18 @@ type Config struct {
 
 	// Frontend URL — browser is redirected here after web OAuth completes
 	FrontendURL string
+
+	OpenAIAPIKey string
+	OpenAIModel  string
+
+	RAGServiceURL string
+	LLMServiceURL string
+
+	// LLMOrchestrationMode controls the inbound-message processing path.
+	//   legacy      — use the built-in vk_agent (OpenAI direct call) as before
+	//   llm_service — route through llm-service orchestrator only
+	//   hybrid      — try llm-service first; fall back to legacy on error/timeout
+	LLMOrchestrationMode string
 }
 
 // VKPlatform returns the VK credentials for the given platform ("web", "android", "ios").
@@ -89,6 +103,18 @@ func (c *Config) VKPlatform(platform string) VKPlatformConfig {
 			AppSecret:   c.VKWebAppSecret,
 			RedirectURI: c.VKWebRedirectURI,
 		}
+	}
+}
+
+// VKCommunityPlatform returns the VK app config used for community OAuth.
+// Group/community tokens must be issued via oauth.vk.com with a redirect URI
+// that is explicitly registered in the app settings, so we always use the
+// web app credentials plus the dedicated public callback URL here.
+func (c *Config) VKCommunityPlatform() VKPlatformConfig {
+	return VKPlatformConfig{
+		AppID:       c.VKWebAppID,
+		AppSecret:   c.VKWebAppSecret,
+		RedirectURI: c.VKGroupRedirectURI,
 	}
 }
 
@@ -127,6 +153,7 @@ func Load() *Config {
 		VKWebAppID:       getEnv("VK_APP_ID_WEB", "54511648"),
 		VKWebAppSecret:   getEnv("VK_APP_SECRET_WEB", ""),
 		VKWebRedirectURI: getEnv("VK_REDIRECT_URI_WEB", "http://localhost:3002/api/v1/social/vk/oauth/user/callback"),
+		VKGroupRedirectURI: getEnv("VK_REDIRECT_URI_GROUP", "http://localhost:3002/api/v1/social/vk/oauth/callback"),
 
 		VKAndroidAppID:       getEnv("VK_APP_ID_ANDROID", "54511649"),
 		VKAndroidAppSecret:   getEnv("VK_APP_SECRET_ANDROID", ""),
@@ -139,6 +166,13 @@ func Load() *Config {
 		VKIOSRedirectURI: getEnv("VK_REDIRECT_URI_IOS", "vk54511650://vk.ru/blank.html"),
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
+
+		OpenAIAPIKey: getEnv("OPENAI_API_KEY", ""),
+		OpenAIModel:  getEnv("OPENAI_MODEL", "gpt-4o-mini"),
+
+		RAGServiceURL:        getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
+		LLMServiceURL:        getEnv("LLM_SERVICE_URL", "http://llm-service:3005"),
+		LLMOrchestrationMode: getEnv("LLM_ORCHESTRATION_MODE", "legacy"),
 	}
 }
 

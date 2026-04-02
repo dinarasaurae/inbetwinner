@@ -49,6 +49,7 @@ func main() {
 	chatH := handlers.NewChatHandler(llmService, histService)
 	toolH := handlers.NewToolHandler(toolService)
 	calH := handlers.NewCalendarHandler(calService)
+	socialH := handlers.NewSocialHandler(llmService)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "inBeTwin LLM Service",
@@ -79,6 +80,8 @@ func main() {
 	llm.Get("/google/status", calH.GetStatus)
 	llm.Get("/google/events", calH.ListEvents)
 	llm.Post("/google/events", calH.CreateEvent)
+	// Social-service orchestration endpoint — not a generic chat endpoint.
+	llm.Post("/social/vk/process", socialH.ProcessVK)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
