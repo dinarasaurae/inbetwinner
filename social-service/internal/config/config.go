@@ -68,14 +68,16 @@ type Config struct {
 	// Frontend URL — browser is redirected here after web OAuth completes
 	FrontendURL string
 
-	OpenAIAPIKey string
-	OpenAIModel  string
+	LLMProvider string
+	LLMAPIKey   string
+	LLMBaseURL  string
+	LLMModel    string
 
 	RAGServiceURL string
 	LLMServiceURL string
 
 	// LLMOrchestrationMode controls the inbound-message processing path.
-	//   legacy      — use the built-in vk_agent (OpenAI direct call) as before
+	//   legacy      — use the built-in vk_agent local draft provider
 	//   llm_service — route through llm-service orchestrator only
 	//   hybrid      — try llm-service first; fall back to legacy on error/timeout
 	LLMOrchestrationMode string
@@ -167,8 +169,10 @@ func Load() *Config {
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 
-		OpenAIAPIKey: getEnv("OPENAI_API_KEY", ""),
-		OpenAIModel:  getEnv("OPENAI_MODEL", "gpt-4o-mini"),
+		LLMProvider: getFirstEnv("openai", "LLM_PROVIDER"),
+		LLMAPIKey:   getFirstEnv("", "LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMBaseURL:  getFirstEnv("", "LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMModel:    getFirstEnv("gpt-4o-mini", "LLM_MODEL", "OPENAI_MODEL"),
 
 		RAGServiceURL:        getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
 		LLMServiceURL:        getEnv("LLM_SERVICE_URL", "http://llm-service:3005"),
@@ -189,6 +193,15 @@ func (c *Config) IsDevelopment() bool {
 func getEnv(key, defaultValue string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return defaultValue
+}
+
+func getFirstEnv(defaultValue string, keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
 	}
 	return defaultValue
 }

@@ -158,7 +158,12 @@ services:
       VK_REDIRECT_URI_IOS: ${VK_REDIRECT_URI_IOS:-vk54511650://vk.ru/blank.html}
 
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       RAG_SERVICE_URL: "http://rag-service:3004"
       LLM_SERVICE_URL: "http://llm-service:3005"
@@ -269,7 +274,14 @@ services:
       DB_NAME: ${LLM_DB_NAME:-llm_db}
       DB_SSL_MODE: "disable"
 
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       MAX_TOOL_ITERATIONS: ${MAX_TOOL_ITERATIONS:-5}
       HISTORY_SIZE: ${HISTORY_SIZE:-20}
