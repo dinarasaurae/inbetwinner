@@ -122,9 +122,9 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 	bm25Ranked := make(map[string]ranked)
 	bm25Order := []string{}
 	ftsRows, err := s.db.QueryContext(ctx, `
-        SELECT pinecone_id, text, ts_rank_cd(search_vector, plainto_tsquery('russian', $1)) as rank
+        SELECT pinecone_id, text, ts_rank_cd(search_vector, plainto_tsquery('simple', $1)) as rank
         FROM knowledge_chunks
-        WHERE workspace_id=$2 AND search_vector @@ plainto_tsquery('russian', $1)
+        WHERE workspace_id=$2 AND search_vector @@ plainto_tsquery('simple', $1)
         ORDER BY rank DESC LIMIT $3`,
 		req.Query, req.WorkspaceID, req.TopK*2,
 	)

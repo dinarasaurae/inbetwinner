@@ -30,6 +30,15 @@ type Config struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 
+	// MinIO / S3-compatible object storage (optional).
+	// When MinioEndpoint is empty the storage layer is disabled and original
+	// files are not persisted — only the extracted text is stored in Postgres.
+	MinioEndpoint  string
+	MinioAccessKey string
+	MinioSecretKey string
+	MinioBucket    string
+	MinioUseSSL    bool
+
 	RagTopK     int
 	RagMinScore float64
 }
@@ -41,8 +50,9 @@ func Load() *Config {
 	dims, _ := strconv.Atoi(getEnv("OPENAI_EMBEDDING_DIMS", "1536"))
 	topK, _ := strconv.Atoi(getEnv("RAG_TOP_K", "5"))
 	minScore, _ := strconv.ParseFloat(getEnv("RAG_MIN_SCORE", "0.70"), 64)
+	minioSSL, _ := strconv.ParseBool(getEnv("MINIO_USE_SSL", "false"))
 	return &Config{
-		Port:        getEnv("PORT", "3003"),
+		Port:        getEnv("PORT", "3004"),
 		Environment: getEnv("ENVIRONMENT", "development"),
 		DBHost:      getEnv("DB_HOST", "localhost"),
 		DBPort:      getEnv("DB_PORT", "5432"),
@@ -61,6 +71,12 @@ func Load() *Config {
 
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
+
+		MinioEndpoint:  getEnv("MINIO_ENDPOINT", ""),
+		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),
+		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
+		MinioBucket:    getEnv("MINIO_BUCKET", "inbetwin-rag"),
+		MinioUseSSL:    minioSSL,
 
 		RagTopK:     topK,
 		RagMinScore: minScore,
