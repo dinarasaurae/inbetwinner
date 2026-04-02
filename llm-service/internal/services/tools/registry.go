@@ -29,16 +29,30 @@ func (r *Registry) HasGoogleCalendar(ctx context.Context, workspaceID uuid.UUID)
 	return err == nil && count > 0
 }
 
-func (r *Registry) GetTools(ctx context.Context, workspaceID uuid.UUID, hasGoogleCal bool) ([]AvailableTool, error) {
+// GetTools returns the tools available for a given workspace.
+//
+// allowedToolIDs — when non-nil, only tools whose ToolID appears in this set
+// are returned. Pass nil to allow everything (no agent restriction, dev/fallback).
+// Built-in calendar tools are additionally gated on hasGoogleCal.
+func (r *Registry) GetTools(ctx context.Context, workspaceID uuid.UUID, hasGoogleCal bool, allowedToolIDs map[string]bool) ([]AvailableTool, error) {
 	var out []AvailableTool
 
-	if hasGoogleCal {
-		out = append(out,
-			AvailableTool{Name: "update_google_calendar", Definition: CalendarCreateSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-calendar-create"},
-			AvailableTool{Name: "list_google_calendar", Definition: CalendarListSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-calendar-list"},
-		)
+	allowed := func(id string) bool {
+		if allowedToolIDs == nil {
+			return true
+		}
+		return allowedToolIDs[id]
 	}
-	out = append(out, AvailableTool{Name: "save_contact_info", Definition: SaveContactSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-save-contact"})
+
+	if hasGoogleCal && allowed("builtin-calendar-create") {
+		out = append(out, AvailableTool{Name: "update_google_calendar", Definition: CalendarCreateSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-calendar-create"})
+	}
+	if hasGoogleCal && allowed("builtin-calendar-list") {
+		out = append(out, AvailableTool{Name: "list_google_calendar", Definition: CalendarListSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-calendar-list"})
+	}
+	if allowed("builtin-save-contact") {
+		out = append(out, AvailableTool{Name: "save_contact_info", Definition: SaveContactSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-save-contact"})
+	}
 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, description, type, schema
@@ -52,6 +66,9 @@ func (r *Registry) GetTools(ctx context.Context, workspaceID uuid.UUID, hasGoogl
 		var t models.Tool
 		var schemaBytes []byte
 		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Type, &schemaBytes); err != nil {
+			continue
+		}
+		if !allowed(t.ID.String()) {
 			continue
 		}
 		t.Schema = json.RawMessage(schemaBytes)

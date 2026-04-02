@@ -47,7 +47,7 @@ func Load() *Config {
 	maxIter, _ := strconv.Atoi(getEnv("MAX_TOOL_ITERATIONS", "5"))
 	histSize, _ := strconv.Atoi(getEnv("HISTORY_SIZE", "20"))
 	return &Config{
-		Port:        getEnv("PORT", "3004"),
+		Port:        getEnv("PORT", "3005"),
 		Environment: getEnv("ENVIRONMENT", "development"),
 		DBHost:      getEnv("DB_HOST", "localhost"),
 		DBPort:      getEnv("DB_PORT", "5432"),
@@ -63,10 +63,10 @@ func Load() *Config {
 
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
-		GoogleRedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:3004/llm/google/callback"),
+		GoogleRedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:3005/llm/google/callback"),
 
-		RAGServiceURL:   getEnv("RAG_SERVICE_URL", "http://rag-service:3003"),
-		AgentServiceURL: getEnv("AGENT_SERVICE_URL", "http://agent-service:3005"),
+		RAGServiceURL:   getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
+		AgentServiceURL: getEnv("AGENT_SERVICE_URL", "http://agent-service:3003"),
 
 		MaxToolIterations: maxIter,
 		HistorySize:       histSize,
