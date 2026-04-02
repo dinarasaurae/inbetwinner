@@ -43,8 +43,26 @@ func main() {
 		}
 	}
 
+	// MinIO / S3 storage — optional; nil when endpoint is not configured
+	ctx := context.Background()
+	storageSvc, err := services.NewStorageService(
+		cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey,
+		cfg.MinioBucket, cfg.MinioUseSSL,
+	)
+	if err != nil {
+		log.Printf("MinIO init warning: %v (continuing without file storage)", err)
+		storageSvc = nil
+	}
+	if storageSvc != nil {
+		if err := storageSvc.EnsureBucket(ctx); err != nil {
+			log.Printf("MinIO bucket ensure warning: %v", err)
+		} else {
+			log.Printf("MinIO connected (bucket: %s)", cfg.MinioBucket)
+		}
+	}
+
 	nsSvc := services.NewNamespaceService(db, pcSvc)
-	docSvc := services.NewDocumentService(db, embSvc, pcSvc, nsSvc, cfg.OpenAIEmbeddingModel)
+	docSvc := services.NewDocumentService(db, embSvc, pcSvc, nsSvc, storageSvc, cfg.OpenAIEmbeddingModel)
 	qaSvc := services.NewQAService(db, embSvc, pcSvc, nsSvc)
 	searchSvc := services.NewSearchService(db, embSvc, pcSvc, nsSvc)
 	sheetsSvc := services.NewSheetsService(db, embSvc, pcSvc, nsSvc)
@@ -57,8 +75,9 @@ func main() {
 
 	app := fiber.New(fiber.Config{
 		AppName:      "inBeTwin RAG Service",
-		ReadTimeout:  30 * time.Second,
+		ReadTimeout:  60 * time.Second, // longer for file uploads
 		WriteTimeout: 30 * time.Second,
+		BodyLimit:    52 << 20, // 52 MB — accommodates 50 MB file + overhead
 	})
 	app.Use(recover.New())
 	app.Use(logger.New(logger.Config{
@@ -70,15 +89,22 @@ func main() {
 	app.Get("/health", handlers.HealthCheck)
 
 	rag := app.Group("/rag", middleware.WorkspaceAuth())
+
 	rag.Post("/namespaces", nsH.Create)
 	rag.Get("/namespaces", nsH.List)
 	rag.Delete("/namespaces/:id", nsH.Delete)
+
+	// Text-based ingestion (JSON body with "content" field)
 	rag.Post("/documents", docH.Create)
+	// File upload (multipart/form-data: file + namespace_id + chunk_size)
+	rag.Post("/documents/upload", docH.Upload)
 	rag.Get("/documents", docH.List)
 	rag.Delete("/documents/:id", docH.Delete)
+
 	rag.Post("/qa", qaH.Create)
 	rag.Get("/qa", qaH.List)
 	rag.Delete("/qa/:id", qaH.Delete)
+
 	rag.Post("/search", searchH.Search)
 	rag.Post("/sheets/sync", sheetsH.Sync)
 
@@ -95,9 +121,9 @@ func main() {
 
 	<-quit
 	log.Println("Shutting down rag-service...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := app.ShutdownWithContext(ctx); err != nil {
+	if err := app.ShutdownWithContext(shutCtx); err != nil {
 		log.Fatalf("shutdown: %v", err)
 	}
 	log.Println("rag-service stopped")

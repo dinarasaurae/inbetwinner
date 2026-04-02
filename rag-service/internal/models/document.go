@@ -17,6 +17,8 @@ type KnowledgeDocument struct {
 	ChunkCount  int       `json:"chunk_count"`
 	Status      string    `json:"status"`
 	EmbedModel  string    `json:"embed_model"`
+	MinioKey    string    `json:"minio_key,omitempty"`
+	FileSize    int64     `json:"file_size,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
