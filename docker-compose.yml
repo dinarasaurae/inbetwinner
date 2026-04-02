@@ -240,19 +240,48 @@ services:
       GOOGLE_SHEETS_API_KEY: ${GOOGLE_SHEETS_API_KEY:-}
 
       RAG_TOP_K: ${RAG_TOP_K:-5}
-      RAG_VECTOR_WEIGHT: ${RAG_VECTOR_WEIGHT:-0.6}
-      RAG_TEXT_WEIGHT: ${RAG_TEXT_WEIGHT:-0.4}
+      RAG_MIN_SCORE: ${RAG_MIN_SCORE:-0.70}
+
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-inbetwin-rag}
+      MINIO_USE_SSL: "false"
 
     ports:
       - "3004:3004"
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3004/health"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
+    networks:
+      - inbetwin-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: inbetwin-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO Console UI
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
       start_period: 10s
     networks:
       - inbetwin-network
@@ -401,6 +430,7 @@ volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+  minio_data:
 
 networks:
   inbetwin-network:
