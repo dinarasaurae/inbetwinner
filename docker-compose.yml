@@ -161,6 +161,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       RAG_SERVICE_URL: "http://rag-service:3004"
+      LLM_SERVICE_URL: "http://llm-service:3005"
+      LLM_ORCHESTRATION_MODE: ${LLM_ORCHESTRATION_MODE:-legacy}
 
     ports:
       - "3002:3002"

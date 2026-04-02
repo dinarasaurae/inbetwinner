@@ -315,6 +315,212 @@ func (s *LLMService) fetchRAGContext(ctx context.Context, workspaceID uuid.UUID,
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
+// ── Social / VK orchestration ────────────────────────────────────────────────
+
+// SocialMessageRequest carries a VK inbound message plus the integration's
+// policy context, sent from social-service to this endpoint.
+type SocialMessageRequest struct {
+	WorkspaceID   uuid.UUID            `json:"workspace_id"`
+	IntegrationID string               `json:"integration_id"`
+	ChatUserID    string               `json:"chat_user_id"`
+	Platform      string               `json:"platform"`
+	Message       string               `json:"message"`
+	Context       *SocialMsgContext    `json:"context,omitempty"`
+}
+
+type SocialMsgContext struct {
+	ToneOfVoice       string   `json:"tone_of_voice,omitempty"`
+	SafeIntents       []string `json:"safe_intents,omitempty"`
+	ForbiddenPromises []string `json:"forbidden_promises,omitempty"`
+	EscalationPolicy  string   `json:"escalation_policy,omitempty"`
+	AutoReplyEnabled  bool     `json:"auto_reply_enabled"`
+	BusinessSnapshot  string   `json:"business_snapshot,omitempty"`
+}
+
+// VKOrchestrationDecision is the structured response returned to social-service.
+type VKOrchestrationDecision struct {
+	Mode              string     `json:"mode"` // "draft" | "auto_reply" | "escalate"
+	DraftText         string     `json:"draft_text"`
+	Confidence        float64    `json:"confidence"`
+	Intent            string     `json:"intent"`
+	SafeIntent        bool       `json:"safe_intent"`
+	Rationale         string     `json:"rationale"`
+	KnowledgeSnippets []string   `json:"knowledge_snippets"`
+	UsedTools         []string   `json:"used_tools,omitempty"`
+	PromptTokens      int        `json:"prompt_tokens"`
+	CompletionTokens  int        `json:"completion_tokens"`
+	TokensUsed        int        `json:"tokens_used"`
+	AgentID           *uuid.UUID `json:"agent_id,omitempty"`
+}
+
+// vkDecisionSchema is the function schema that forces the model to always
+// respond with a structured reply decision (tool_choice="required").
+var vkDecisionSchema = json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "mode":       {"type": "string", "enum": ["draft", "auto_reply", "escalate"]},
+    "draft_text": {"type": "string"},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "intent":     {"type": "string"},
+    "safe_intent":{"type": "boolean"},
+    "rationale":  {"type": "string"}
+  },
+  "required": ["mode", "draft_text", "confidence", "intent", "safe_intent", "rationale"]
+}`)
+
+// ProcessSocialMessage runs the VK inbound-message orchestration:
+//  1. Resolves agent config from agent-service (graceful fallback).
+//  2. Fetches RAG context scoped to agent namespaces.
+//  3. Uses function calling with tool_choice="required" to get a structured
+//     reply decision: mode, draft_text, confidence, intent, safe_intent, rationale.
+//  4. Returns VKOrchestrationDecision.
+func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessageRequest) (*VKOrchestrationDecision, error) {
+	// Synthesise a ChatRequest for agent resolution.
+	chatReq := ChatRequest{
+		WorkspaceID: req.WorkspaceID,
+		ChatUserID:  req.ChatUserID,
+		Platform:    req.Platform,
+		Message:     req.Message,
+	}
+	params, agentID, _ := s.resolveAgentConfig(ctx, chatReq)
+
+	// RAG context.
+	ragContext := s.fetchRAGContext(ctx, req.WorkspaceID, req.Message, params.ragTopK, params.namespaces)
+
+	// Build the snippets list for the response (plain strings).
+	snippets := []string{}
+	if ragContext != "" {
+		for _, part := range strings.Split(ragContext, "\n\n---\n\n") {
+			if p := strings.TrimSpace(part); p != "" {
+				snippets = append(snippets, p)
+			}
+		}
+	}
+
+	// Build the system prompt, layering agent config + integration policy.
+	systemPrompt := s.buildVKSystemPrompt(params.systemPmt, req.Context, ragContext)
+
+	decisionTool := openai.Tool{
+		Type: openai.ToolTypeFunction,
+		Function: &openai.FunctionDefinition{
+			Name:        "vk_reply_decision",
+			Description: "Generate a structured reply decision for a VK inbound message.",
+			Parameters:  vkDecisionSchema,
+		},
+	}
+
+	compReq := openai.ChatCompletionRequest{
+		Model: params.model,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+			{Role: openai.ChatMessageRoleUser, Content: req.Message},
+		},
+		Temperature: params.temperature,
+		MaxTokens:   600,
+		Tools:       []openai.Tool{decisionTool},
+		ToolChoice:  "required",
+	}
+
+	resp, err := s.client.CreateChatCompletion(ctx, compReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai social: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("openai social: no choices")
+	}
+
+	choice := resp.Choices[0]
+	promptTok := resp.Usage.PromptTokens
+	completionTok := resp.Usage.CompletionTokens
+	totalTok := resp.Usage.TotalTokens
+
+	// Parse the tool call arguments.
+	var args struct {
+		Mode       string  `json:"mode"`
+		DraftText  string  `json:"draft_text"`
+		Confidence float64 `json:"confidence"`
+		Intent     string  `json:"intent"`
+		SafeIntent bool    `json:"safe_intent"`
+		Rationale  string  `json:"rationale"`
+	}
+	if len(choice.Message.ToolCalls) > 0 {
+		if err := json.Unmarshal([]byte(choice.Message.ToolCalls[0].Function.Arguments), &args); err != nil {
+			return nil, fmt.Errorf("parse decision args: %w", err)
+		}
+	} else {
+		// Fallback: model returned plain text instead of a tool call.
+		args.Mode = "draft"
+		args.DraftText = strings.TrimSpace(choice.Message.Content)
+		args.Confidence = 0.5
+		args.Intent = "unknown"
+		args.SafeIntent = false
+		args.Rationale = "plain-text fallback"
+	}
+
+	// Override mode based on integration policy: if context says auto_reply
+	// is disabled, downgrade auto_reply → draft.
+	if args.Mode == "auto_reply" && req.Context != nil && !req.Context.AutoReplyEnabled {
+		args.Mode = "draft"
+	}
+
+	decision := &VKOrchestrationDecision{
+		Mode:              args.Mode,
+		DraftText:         args.DraftText,
+		Confidence:        args.Confidence,
+		Intent:            args.Intent,
+		SafeIntent:        args.SafeIntent,
+		Rationale:         args.Rationale,
+		KnowledgeSnippets: snippets,
+		PromptTokens:      promptTok,
+		CompletionTokens:  completionTok,
+		TokensUsed:        totalTok,
+		AgentID:           agentID,
+	}
+	return decision, nil
+}
+
+func (s *LLMService) buildVKSystemPrompt(agentBase string, ctx *SocialMsgContext, ragContext string) string {
+	sb := strings.Builder{}
+	sb.WriteString(agentBase)
+	sb.WriteString("\n\nТы отвечаешь от лица VK-сообщества бизнеса.\n")
+
+	if ctx != nil {
+		tone := ctx.ToneOfVoice
+		if tone == "" {
+			tone = "спокойный, полезный, вежливый"
+		}
+		sb.WriteString("Тон: " + tone + ".\n")
+
+		if ctx.BusinessSnapshot != "" {
+			sb.WriteString("Контекст бизнеса: " + ctx.BusinessSnapshot + "\n")
+		}
+		if len(ctx.ForbiddenPromises) > 0 {
+			sb.WriteString("Нельзя обещать: " + strings.Join(ctx.ForbiddenPromises, "; ") + ".\n")
+		}
+		if ctx.EscalationPolicy != "" {
+			sb.WriteString("Политика эскалации: " + ctx.EscalationPolicy + "\n")
+		}
+		if len(ctx.SafeIntents) > 0 {
+			sb.WriteString("Безопасные интенты для auto_reply: " + strings.Join(ctx.SafeIntents, ", ") + "\n")
+		}
+	}
+
+	if ragContext != "" {
+		sb.WriteString("\nКонтекст из базы знаний:\n" + ragContext + "\n")
+	}
+
+	sb.WriteString(`
+Вызови функцию vk_reply_decision с полями:
+- mode: "draft" (требует проверки менеджером) | "auto_reply" (можно отправить автоматически) | "escalate" (передать человеку)
+- draft_text: текст ответа на русском, коротко и конкретно
+- confidence: вероятность 0..1
+- intent: классификация намерения (faq, hours, basic_prices, qualification, handoff, unknown)
+- safe_intent: true если можно отвечать без проверки
+- rationale: краткое объяснение решения
+`)
+	return sb.String()
+}
+
 // --- small helpers ---
 
 func coalesceStr(a, b string) string {
