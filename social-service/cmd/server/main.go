@@ -171,6 +171,22 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	// ── Startup diagnostics ──────────────────────────────────────────────────
+	{
+		provider := cfg.LLMProvider
+		if provider == "" {
+			provider = "openai"
+		}
+		orchMode := cfg.LLMOrchestrationMode
+		if orchMode == "" {
+			orchMode = "legacy"
+		}
+		log.Printf("social-service orchestration : %s", orchMode)
+		log.Printf("social-service llm-service   : %s", cfg.LLMServiceURL)
+		log.Printf("social-service llm provider  : %s", provider)
+		log.Printf("social-service llm model     : %s", cfg.LLMModel)
+	}
+
 	go func() {
 		addr := fmt.Sprintf(":%s", cfg.Port)
 		log.Printf("Social Service starting on http://localhost%s", addr)

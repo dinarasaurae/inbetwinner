@@ -36,9 +36,10 @@ OPENAI_API_KEY=sk-...
 LLM_ORCHESTRATION_MODE=llm_service
 
 # ─── VK ──────────────────────────────────────────────────────────────────────
-VK_CLIENT_ID=...
-VK_CLIENT_SECRET=...
-VK_REDIRECT_URI=http://localhost:3001/social/vk/callback
+VK_APP_ID_WEB=...
+VK_APP_SECRET_WEB=...
+VK_REDIRECT_URI_WEB=http://localhost:3002/social/vk/oauth/user/callback
+VK_REDIRECT_URI_GROUP=http://localhost:3002/social/vk/oauth/callback
 
 # ─── RAG / Pinecone (опционально) ────────────────────────────────────────────
 PINECONE_API_KEY=...
@@ -101,7 +102,7 @@ export INTEGRATION_ID="uuid-of-your-integration"
 ### 3.3 Настроить агента
 
 ```bash
-curl -s -X PUT http://localhost:8080/api/v1/social/vk/agent-settings \
+curl -s -X PUT http://localhost:8080/api/v1/social/vk/agent/settings \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -263,7 +264,7 @@ docker compose exec postgres psql -U social_user -d social_db -c "
 Изменить настройки агента:
 
 ```bash
-curl -s -X PUT http://localhost:8080/api/v1/social/vk/agent-settings \
+curl -s -X PUT http://localhost:8080/api/v1/social/vk/agent/settings \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{

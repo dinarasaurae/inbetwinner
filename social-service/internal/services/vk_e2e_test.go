@@ -313,8 +313,10 @@ func TestE2E_LLMService_Success_DraftPersisted(t *testing.T) {
 	if draft.OrchestrationSource != "llm_service" {
 		t.Errorf("orchestration_source: got %q, want llm_service", draft.OrchestrationSource)
 	}
-	if draft.LLMLatencyMs == nil || *draft.LLMLatencyMs <= 0 {
-		t.Error("llm_latency_ms should be set and positive")
+	// Mock httptest responds in <1 ms, so Milliseconds() may return 0;
+	// we only require the column to be set (not NULL).
+	if draft.LLMLatencyMs == nil {
+		t.Error("llm_latency_ms should be set (non-NULL)")
 	}
 	if draft.PromptTokens == nil || *draft.PromptTokens != 85 {
 		t.Errorf("prompt_tokens: got %v, want 85", draft.PromptTokens)

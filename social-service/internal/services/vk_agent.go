@@ -610,6 +610,8 @@ func (s *VKService) loadDraft(ctx context.Context, userID, draftID uuid.UUID) (*
 	var fallbackReason sql.NullString
 	var usedAgentID uuid.NullUUID
 	var orchSource sql.NullString
+	// group_screen_name and group_photo are nullable in vk_integrations.
+	var groupScreenName, groupPhoto sql.NullString
 	draft := &models.VKReplyDraft{}
 
 	err := s.db.QueryRowContext(ctx, `
@@ -622,10 +624,12 @@ func (s *VKService) loadDraft(ctx context.Context, userID, draftID uuid.UUID) (*
 		draftID, userID,
 	).Scan(&draft.ID, &draft.IntegrationID, &draft.InboundMessageID, &draft.FromVKUserID, &draft.Intent, &draft.Confidence, &draft.SafeIntent, &draft.Status, &draft.Source, &draft.DraftText, &draft.Rationale, &snippetsRaw, &sentID, &approvedBy, &draft.GeneratedAt, &draft.ApprovedAt, &draft.SentAt,
 		&orchSource, &latencyMs, &fallbackReason, &promptTok, &completionTok, &usedAgentID, &toolsRaw,
-		&integ.ID, &integ.UserID, &integ.GroupID, &integ.GroupName, &integ.GroupScreenName, &integ.GroupPhoto, &integ.IsActive, &integ.ConnectedAt)
+		&integ.ID, &integ.UserID, &integ.GroupID, &integ.GroupName, &groupScreenName, &groupPhoto, &integ.IsActive, &integ.ConnectedAt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("not_found: draft not found")
 	}
+	integ.GroupScreenName = groupScreenName.String
+	integ.GroupPhoto = groupPhoto.String
 	_ = json.Unmarshal(snippetsRaw, &draft.KnowledgeSnippets)
 	_ = json.Unmarshal(toolsRaw, &draft.UsedTools)
 	if draft.UsedTools == nil {
