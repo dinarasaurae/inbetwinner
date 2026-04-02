@@ -9,7 +9,9 @@ import (
 const APIVersion = "5.199"
 
 // APIBase is the VK API base URL.
-const APIBase = "https://api.vk.com/method"
+// Declared as var (not const) so integration tests can point it at an httptest
+// server without modifying production code. Production value never changes.
+var APIBase = "https://api.vk.com/method"
 
 // VKIDAuthURL is the browser-facing VK ID authorization endpoint (opens in browser/WebView).
 const VKIDAuthURL = "https://id.vk.com/authorize"
