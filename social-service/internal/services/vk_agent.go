@@ -152,28 +152,45 @@ func (s *VKService) ensureAgentSettings(ctx context.Context, integrationID uuid.
 	return settings, nil
 }
 
-// processInboundMessage dispatches to the appropriate path based on the
-// service-level LLM_ORCHESTRATION_MODE, allowing safe migration from the
-// built-in legacy agent to the llm-service orchestrator.
+// effectiveOrchestrationMode returns the orchestration mode to use for a given
+// integration. The per-integration OrchestrationMode field (from vk_agent_settings)
+// takes precedence over the service-wide LLM_ORCHESTRATION_MODE env var.
+//
+// Priority: settings.OrchestrationMode (non-empty) → s.cfg.LLMOrchestrationMode → "legacy"
+func (s *VKService) effectiveOrchestrationMode(settings *models.VKAgentSettings) string {
+	if settings != nil && settings.OrchestrationMode != "" {
+		return settings.OrchestrationMode
+	}
+	if s.cfg.LLMOrchestrationMode != "" {
+		return s.cfg.LLMOrchestrationMode
+	}
+	return "legacy"
+}
+
+// processInboundMessage loads per-integration settings once, resolves the
+// effective orchestration mode (per-integration override takes precedence over
+// the service-level LLM_ORCHESTRATION_MODE), then dispatches.
 func (s *VKService) processInboundMessage(ctx context.Context, userID, integrationID, messageID uuid.UUID) {
-	switch s.cfg.LLMOrchestrationMode {
+	settings, err := s.ensureAgentSettings(ctx, integrationID)
+	if err != nil {
+		log.Printf("[vk-agent] settings: %v", err)
+		return
+	}
+
+	switch s.effectiveOrchestrationMode(settings) {
 	case "llm_service":
-		s.processInboundMessageLLM(ctx, userID, integrationID, messageID, false)
+		s.processInboundMessageLLM(ctx, userID, integrationID, messageID, false, settings)
 	case "hybrid":
-		s.processInboundMessageLLM(ctx, userID, integrationID, messageID, true)
+		s.processInboundMessageLLM(ctx, userID, integrationID, messageID, true, settings)
 	default: // "legacy"
-		s.processInboundMessageLegacy(ctx, userID, integrationID, messageID)
+		s.processInboundMessageLegacy(ctx, userID, integrationID, messageID, settings)
 	}
 }
 
 // processInboundMessageLegacy is the original, unchanged draft-generation
-// pipeline using the vk_agent built-in logic. It is the fallback path.
-func (s *VKService) processInboundMessageLegacy(ctx context.Context, userID, integrationID, messageID uuid.UUID) {
-	settings, err := s.ensureAgentSettings(ctx, integrationID)
-	if err != nil {
-		log.Printf("[vk-agent][legacy] settings: %v", err)
-		return
-	}
+// pipeline using the vk_agent built-in logic. settings is pre-loaded by the
+// dispatcher to avoid a redundant DB call.
+func (s *VKService) processInboundMessageLegacy(ctx context.Context, userID, integrationID, messageID uuid.UUID, settings *models.VKAgentSettings) {
 	if !settings.DraftFirst && !settings.AutoReplyEnabled {
 		_, _ = s.db.ExecContext(ctx, `UPDATE vk_messages SET is_processed=TRUE WHERE id=$1`, messageID)
 		return
@@ -185,18 +202,14 @@ func (s *VKService) processInboundMessageLegacy(ctx context.Context, userID, int
 
 // processInboundMessageLLM routes through the llm-service orchestrator.
 // withFallback=true means hybrid mode: on error fall back to legacy.
-func (s *VKService) processInboundMessageLLM(ctx context.Context, userID, integrationID, messageID uuid.UUID, withFallback bool) {
+// settings is pre-loaded by the dispatcher.
+func (s *VKService) processInboundMessageLLM(ctx context.Context, userID, integrationID, messageID uuid.UUID, withFallback bool, settings *models.VKAgentSettings) {
 	if s.llmClient == nil {
 		log.Printf("[vk-agent][llm] llm client not configured, falling back to legacy")
-		s.processInboundMessageLegacy(ctx, userID, integrationID, messageID)
+		s.processInboundMessageLegacy(ctx, userID, integrationID, messageID, settings)
 		return
 	}
 
-	settings, err := s.ensureAgentSettings(ctx, integrationID)
-	if err != nil {
-		log.Printf("[vk-agent][llm] settings: %v", err)
-		return
-	}
 	if !settings.DraftFirst && !settings.AutoReplyEnabled {
 		_, _ = s.db.ExecContext(ctx, `UPDATE vk_messages SET is_processed=TRUE WHERE id=$1`, messageID)
 		return
