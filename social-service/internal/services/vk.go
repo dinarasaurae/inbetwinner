@@ -45,7 +45,7 @@ type VKService struct {
 	db            *database.DB
 	enc           *crypto.Encryptor
 	cfg           *config.Config
-	llmClient     *VKLLMClient       // nil when LLM_SERVICE_URL is not configured
+	llmClient     *VKLLMClient // nil when LLM_SERVICE_URL is not configured
 	draftProvider ChatCompletionProvider
 
 	// oauthStates stores short-lived CSRF nonces for all OAuth flows.
@@ -106,6 +106,15 @@ func (s *VKService) cleanExpiredStates() {
 //   - Implicit flow removed (response_type=token no longer works)
 //   - device_id returned in callback, required for token exchange
 func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
+	// Mobile platforms must use the legacy oauth.vk.com path so that step 1
+	// (user OAuth) and step 2 (group/community OAuth) share the same browser
+	// session domain. VK ID OAuth 2.1 authenticates on id.vk.ru; when the
+	// wizard then opens oauth.vk.com for the group token the browser has no
+	// session there and shows a second login prompt, breaking the auto-flow.
+	if platform == "android" || platform == "ios" {
+		return s.UserLegacyOAuthStart(ctx, userID, platform)
+	}
+
 	pc := s.cfg.VKPlatform(platform)
 	if pc.AppID == "" {
 		return "", "", false, fmt.Errorf("VK app ID not configured for platform %q", platform)
@@ -148,6 +157,39 @@ func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platfo
 	return authURL, state, false, nil
 }
 
+// UserLegacyOAuthStart builds the pre-VK-ID browser auth URL on oauth.vk.com.
+// We keep this preparatory step close to the historically working flow:
+// the same browser-based authorize URL with code exchange, because the old
+// auto-token path relied on that auth surface being reused for group OAuth.
+func (s *VKService) UserLegacyOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
+	pc := s.cfg.VKLegacyMobilePlatform(platform)
+	if pc.AppID == "" {
+		return "", "", false, fmt.Errorf("VK app ID not configured for platform %q", platform)
+	}
+
+	state = s.newState()
+	s.oauthMu.Lock()
+	s.oauthStates[state] = pendingOAuth{
+		userID:   userID,
+		groupID:  0,
+		platform: platform,
+		expiry:   time.Now().Add(10 * time.Minute),
+	}
+	s.oauthMu.Unlock()
+
+	authURL = fmt.Sprintf(
+		"%s/authorize?client_id=%s&display=page&redirect_uri=%s"+
+			"&scope=groups,wall,offline&response_type=code&v=%s&state=%s",
+		vkapi.OAuthBase,
+		url.QueryEscape(pc.AppID),
+		url.QueryEscape(pc.RedirectURI),
+		vkapi.APIVersion,
+		state,
+	)
+	log.Printf("vk: legacy user oauth start user=%s platform=%s app_id=%s redirect_uri=%s auth_url=%s", userID, platform, pc.AppID, pc.RedirectURI, authURL)
+	return authURL, state, false, nil
+}
+
 // UserOAuthExchange is called by the mobile app after intercepting the deep-link
 // redirect from VK.
 //
@@ -159,6 +201,13 @@ func (s *VKService) UserOAuthExchange(ctx context.Context, req models.VKUserOAut
 	}
 	if req.Platform != "" {
 		pending.platform = req.Platform
+	}
+
+	if req.AccessToken != "" {
+		return s.finishUserOAuthImplicit(ctx, req.AccessToken, req.VKUserID, pending)
+	}
+	if pending.codeVerifier == "" {
+		return s.finishUserOAuthLegacy(ctx, req.Code, pending)
 	}
 	return s.finishUserOAuth(ctx, req.Code, req.DeviceID, pending)
 }
@@ -196,47 +245,41 @@ func (s *VKService) finishUserOAuth(ctx context.Context, code, deviceID string, 
 	if userToken == "" {
 		return nil, fmt.Errorf("user_token_missing: no access_token in OAuth response")
 	}
-	// VK ID returns user_id inside the token JWT or as a separate field
+	// VK ID returns user_id inside the token JWT or as a separate field.
 	vkUserIDStr := resp["user_id"]
 	var vkUserID int64
 	fmt.Sscanf(vkUserIDStr, "%d", &vkUserID)
+	if vkUserID == 0 {
+		if me, meErr := vkapi.NewUserClient(userToken).UsersGetMe(ctx); meErr == nil {
+			vkUserID = me.ID
+		}
+	}
 
-	tokenEnc, tokenIV, err := s.encryptToken([]byte(userToken))
+	return s.saveUserConnection(ctx, pending.userID, vkUserID, pending.platform, userToken)
+}
+
+func (s *VKService) finishUserOAuthLegacy(ctx context.Context, code string, pending pendingOAuth) (*models.VKUserConnection, error) {
+	pc := s.cfg.VKLegacyMobilePlatform(pending.platform)
+
+	resp, err := s.exchangeCode(ctx, code, pc)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("legacy_token_exchange: %w", err)
 	}
 
-	conn := &models.VKUserConnection{
-		ID:             uuid.New(),
-		UserID:         pending.userID,
-		VKUserID:       vkUserID,
-		Platform:       pending.platform,
-		AccessTokenEnc: tokenEnc,
-		AccessTokenIV:  tokenIV,
-		Scope:          "groups,wall,offline",
-		ConnectedAt:    time.Now(),
+	userToken := resp["access_token"]
+	if userToken == "" {
+		return nil, fmt.Errorf("user_token_missing: no access_token in OAuth response")
+	}
+	vkUserIDStr := resp["user_id"]
+	var vkUserID int64
+	fmt.Sscanf(vkUserIDStr, "%d", &vkUserID)
+	if vkUserID == 0 {
+		if me, meErr := vkapi.NewUserClient(userToken).UsersGetMe(ctx); meErr == nil {
+			vkUserID = me.ID
+		}
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO vk_user_connections
-			(id, user_id, vk_user_id, platform,
-			 access_token_enc, access_token_iv, scope)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		ON CONFLICT (user_id) DO UPDATE SET
-			vk_user_id       = EXCLUDED.vk_user_id,
-			platform         = EXCLUDED.platform,
-			access_token_enc = EXCLUDED.access_token_enc,
-			access_token_iv  = EXCLUDED.access_token_iv,
-			scope            = EXCLUDED.scope,
-			updated_at       = now()`,
-		conn.ID, conn.UserID, conn.VKUserID, conn.Platform,
-		conn.AccessTokenEnc, conn.AccessTokenIV, conn.Scope,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("save_user_connection: %w", err)
-	}
-
-	return conn, nil
+	return s.saveUserConnection(ctx, pending.userID, vkUserID, pending.platform, userToken)
 }
 
 // finishUserOAuthImplicit stores a token that arrived directly in the redirect
@@ -246,6 +289,27 @@ func (s *VKService) finishUserOAuthImplicit(ctx context.Context, accessToken str
 		return nil, fmt.Errorf("implicit_flow: access_token is empty")
 	}
 
+	return s.saveUserConnection(ctx, pending.userID, vkUserID, pending.platform, accessToken)
+}
+
+// ImportUserOAuthToken stores a VK access token that was already obtained by the
+// mobile app during app login, avoiding a second VK account auth step.
+func (s *VKService) ImportUserOAuthToken(ctx context.Context, userID uuid.UUID, accessToken, platform string) (*models.VKUserConnection, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return nil, fmt.Errorf("invalid_request: access_token is empty")
+	}
+	me, err := vkapi.NewUserClient(accessToken).UsersGetMe(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("invalid_token: %w", err)
+	}
+	return s.saveUserConnection(ctx, userID, me.ID, platform, accessToken)
+}
+
+func (s *VKService) saveUserConnection(ctx context.Context, userID uuid.UUID, vkUserID int64, platform, accessToken string) (*models.VKUserConnection, error) {
+	if vkUserID == 0 {
+		return nil, fmt.Errorf("vk_user_id_missing: failed to resolve current VK user")
+	}
+
 	tokenEnc, tokenIV, err := s.encryptToken([]byte(accessToken))
 	if err != nil {
 		return nil, err
@@ -253,9 +317,9 @@ func (s *VKService) finishUserOAuthImplicit(ctx context.Context, accessToken str
 
 	conn := &models.VKUserConnection{
 		ID:             uuid.New(),
-		UserID:         pending.userID,
+		UserID:         userID,
 		VKUserID:       vkUserID,
-		Platform:       pending.platform,
+		Platform:       platform,
 		AccessTokenEnc: tokenEnc,
 		AccessTokenIV:  tokenIV,
 		Scope:          "groups,wall,offline",
@@ -291,9 +355,39 @@ func (s *VKService) finishUserOAuthImplicit(ctx context.Context, accessToken str
 // issues a community token for that specific group.
 // platform: "web" | "android" | "ios"
 func (s *VKService) OAuthStart(ctx context.Context, userID uuid.UUID, groupID int64, platform string) (string, string, error) {
-	pc := s.cfg.VKCommunityPlatform()
+	state := s.newState()
+
+	pc := s.communityAccessPlatform(platform)
 	if pc.AppID == "" {
-		return "", "", fmt.Errorf("VK community app ID not configured")
+		return "", "", fmt.Errorf("VK community app ID not configured for platform %q", platform)
+	}
+
+	s.oauthMu.Lock()
+	s.oauthStates[state] = pendingOAuth{
+		userID:   userID,
+		groupID:  groupID,
+		platform: platform,
+		expiry:   time.Now().Add(10 * time.Minute),
+	}
+	s.oauthMu.Unlock()
+
+	authURL := s.buildCommunityOAuthURL(pc, groupID, state)
+	log.Printf("vk: group oauth start user=%s group=%d platform=%s app_id=%s redirect_uri=%s auth_url=%s", userID, groupID, platform, pc.AppID, pc.RedirectURI, authURL)
+	return authURL, state, nil
+}
+
+func (s *VKService) CommunityAccessStart(ctx context.Context, userID, integrationID uuid.UUID, platform string) (string, string, int64, error) {
+	var groupID int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT group_id FROM vk_integrations WHERE id=$1 AND user_id=$2 AND is_active=TRUE`,
+		integrationID, userID,
+	).Scan(&groupID); err != nil {
+		return "", "", 0, fmt.Errorf("not_found: integration not found")
+	}
+
+	pc := s.communityAccessPlatform(platform)
+	if pc.AppID == "" {
+		return "", "", 0, fmt.Errorf("VK community app ID not configured")
 	}
 
 	state := s.newState()
@@ -306,22 +400,77 @@ func (s *VKService) OAuthStart(ctx context.Context, userID uuid.UUID, groupID in
 	}
 	s.oauthMu.Unlock()
 
-	authURL := fmt.Sprintf(
-		"%s/authorize?client_id=%s&display=page&redirect_uri=%s"+
-			// For community tokens VK only allows community-scoped rights.
-			// We only need:
-			// - messages: send replies from the community
-			// - manage: get Long Poll server settings for inbound messages
-			"&scope=messages,manage&response_type=code&v=%s"+
-			"&group_ids=%d&state=%s",
-		vkapi.OAuthBase,
-		url.QueryEscape(pc.AppID),
-		url.QueryEscape(pc.RedirectURI),
-		vkapi.APIVersion,
-		groupID,
-		state,
-	)
-	return authURL, state, nil
+	authURL := s.buildCommunityOAuthURL(pc, groupID, state)
+	log.Printf("vk: community access start user=%s integration=%s group=%d platform=%s app_id=%s redirect_uri=%s", userID, integrationID, groupID, platform, pc.AppID, pc.RedirectURI)
+	return authURL, state, groupID, nil
+}
+
+// SaveCommunityToken stores a manually created VK community token for an
+// already connected integration and starts Long Poll if the token is valid.
+func (s *VKService) SaveCommunityToken(ctx context.Context, userID, integrationID uuid.UUID, communityToken string) (*models.VKIntegration, error) {
+	integ, _, err := s.loadIntegration(ctx, userID, integrationID)
+	if err != nil {
+		return nil, err
+	}
+
+	token := strings.TrimSpace(communityToken)
+	if token == "" {
+		return nil, fmt.Errorf("invalid_request: community token is required")
+	}
+
+	client := vkapi.NewClient(token, integ.GroupID)
+	if _, err := client.GroupsGetLongPollServer(ctx, integ.GroupID); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "longpoll for this group is not enabled") {
+			return nil, fmt.Errorf("invalid_group_token: token does not match this group or lacks required rights")
+		}
+	}
+
+	tokenEnc, tokenIV, err := s.encryptToken([]byte(token))
+	if err != nil {
+		return nil, err
+	}
+
+	integ.GroupTokenEnc = tokenEnc
+	integ.GroupTokenIV = tokenIV
+	integ, err = s.saveIntegration(ctx, integ)
+	if err != nil {
+		return nil, err
+	}
+	integ.CommunityAccessEnabled = true
+
+	go s.startWorker(context.Background(), integ, token)
+	return integ, nil
+}
+
+func (s *VKService) connectGroupWithUserToken(ctx context.Context, userID uuid.UUID, groupID int64) (*models.VKIntegration, error) {
+	userToken, err := s.loadUserToken(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	group, err := vkapi.NewUserClient(userToken).GroupsGetByID(ctx, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch_group: %w", err)
+	}
+	if group.ID == 0 {
+		return nil, fmt.Errorf("fetch_group: empty group response")
+	}
+	if group.IsAdmin == 0 && group.AdminLevel == 0 {
+		log.Printf("vk: direct connect group lookup returned no admin flags user=%s group=%d name=%q screen_name=%q", userID, groupID, group.Name, group.ScreenName)
+	}
+
+	integ := &models.VKIntegration{
+		ID:              uuid.New(),
+		UserID:          userID,
+		GroupID:         groupID,
+		GroupName:       group.Name,
+		GroupScreenName: group.ScreenName,
+		GroupPhoto:      group.Photo200,
+		IsActive:        true,
+		ConnectedAt:     time.Now(),
+	}
+	return s.saveIntegration(ctx, integ)
 }
 
 func (s *VKService) ResolveGroupRef(ctx context.Context, userID uuid.UUID, groupRef string) (int64, error) {
@@ -355,10 +504,13 @@ func (s *VKService) ResolveGroupRef(ctx context.Context, userID uuid.UUID, group
 }
 
 // OAuthExchange is called by the mobile app after intercepting the deep-link.
-func (s *VKService) OAuthExchange(ctx context.Context, code, state string) (*models.VKIntegration, error) {
+func (s *VKService) OAuthExchange(ctx context.Context, code, state, accessToken string) (*models.VKIntegration, error) {
 	pending, ok := s.popState(state)
 	if !ok {
 		return nil, fmt.Errorf("invalid_state: OAuth state not found or expired")
+	}
+	if accessToken != "" {
+		return s.finishGroupOAuthImplicit(ctx, accessToken, pending)
 	}
 	return s.finishGroupOAuth(ctx, code, pending)
 }
@@ -374,7 +526,7 @@ func (s *VKService) OAuthCallback(ctx context.Context, code, state string) (*mod
 }
 
 func (s *VKService) finishGroupOAuth(ctx context.Context, code string, pending pendingOAuth) (*models.VKIntegration, error) {
-	pc := s.cfg.VKCommunityPlatform()
+	pc := s.communityAccessPlatform(pending.platform)
 
 	tokenResp, err := s.exchangeCode(ctx, code, pc)
 	if err != nil {
@@ -415,14 +567,80 @@ func (s *VKService) finishGroupOAuth(ctx context.Context, code string, pending p
 		ConnectedAt:     time.Now(),
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	integ, err = s.saveIntegration(ctx, integ)
+	if err != nil {
+		return nil, err
+	}
+
+	go s.startWorker(context.Background(), integ, groupToken)
+
+	return integ, nil
+}
+
+func (s *VKService) finishGroupOAuthImplicit(ctx context.Context, groupToken string, pending pendingOAuth) (*models.VKIntegration, error) {
+	groupToken = strings.TrimSpace(groupToken)
+	if groupToken == "" {
+		return nil, fmt.Errorf("group_token_missing: access_token is empty")
+	}
+
+	userToken, err := s.loadUserToken(ctx, pending.userID)
+	if err != nil {
+		userToken = groupToken
+	}
+
+	group, err := vkapi.NewUserClient(userToken).GroupsGetByID(ctx, pending.groupID)
+	if err != nil && userToken != groupToken {
+		group, err = vkapi.NewUserClient(groupToken).GroupsGetByID(ctx, pending.groupID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch_group: %w", err)
+	}
+
+	tokenEnc, tokenIV, err := s.encryptToken([]byte(groupToken))
+	if err != nil {
+		return nil, err
+	}
+
+	integ := &models.VKIntegration{
+		ID:              uuid.New(),
+		UserID:          pending.userID,
+		GroupID:         pending.groupID,
+		GroupTokenEnc:   tokenEnc,
+		GroupTokenIV:    tokenIV,
+		GroupName:       group.Name,
+		GroupScreenName: group.ScreenName,
+		GroupPhoto:      group.Photo200,
+		IsActive:        true,
+		ConnectedAt:     time.Now(),
+	}
+
+	integ, err = s.saveIntegration(ctx, integ)
+	if err != nil {
+		return nil, err
+	}
+
+	go s.startWorker(context.Background(), integ, groupToken)
+	return integ, nil
+}
+
+func (s *VKService) communityAccessPlatform(platform string) config.VKPlatformConfig {
+	switch strings.ToLower(platform) {
+	case "android", "ios":
+		return s.cfg.VKLegacyMobilePlatform(platform)
+	default:
+		return s.cfg.VKCommunityPlatform()
+	}
+}
+
+func (s *VKService) saveIntegration(ctx context.Context, integ *models.VKIntegration) (*models.VKIntegration, error) {
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO vk_integrations
 			(id, user_id, group_id, group_token_enc, group_token_iv,
 			 group_name, group_screen_name, group_photo, is_active)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE)
 		ON CONFLICT (user_id, group_id) DO UPDATE SET
-			group_token_enc   = EXCLUDED.group_token_enc,
-			group_token_iv    = EXCLUDED.group_token_iv,
+			group_token_enc   = COALESCE(EXCLUDED.group_token_enc, vk_integrations.group_token_enc),
+			group_token_iv    = COALESCE(EXCLUDED.group_token_iv, vk_integrations.group_token_iv),
 			group_name        = EXCLUDED.group_name,
 			group_screen_name = EXCLUDED.group_screen_name,
 			group_photo       = EXCLUDED.group_photo,
@@ -440,12 +658,46 @@ func (s *VKService) finishGroupOAuth(ctx context.Context, code string, pending p
 		`SELECT id FROM vk_integrations WHERE user_id=$1 AND group_id=$2`,
 		integ.UserID, integ.GroupID,
 	).Scan(&integ.ID); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("save_integration: %w", err)
 	}
-
-	go s.startWorker(context.Background(), integ, groupToken)
-
 	return integ, nil
+}
+
+func (s *VKService) buildCommunityOAuthURL(pc config.VKPlatformConfig, groupID int64, state string) string {
+	return fmt.Sprintf(
+		"%s/authorize?client_id=%s&display=%s&redirect_uri=%s"+
+			"&scope=messages,wall,photos,offline&response_type=code&v=%s"+
+			"&group_ids=%d&state=%s",
+		vkapi.OAuthBase,
+		url.QueryEscape(pc.AppID),
+		s.oauthDisplay(""),
+		url.QueryEscape(pc.RedirectURI),
+		vkapi.APIVersion,
+		groupID,
+		state,
+	)
+}
+
+func (s *VKService) oauthDisplay(platform string) string {
+	// Keep oauth.vk.com browser flows aligned with the last known working
+	// mobile behavior. Historically VK returned the callback correctly when
+	// Android/iOS also used display=page here.
+	return "page"
+}
+
+func (s *VKService) oauthDisplayForRedirect(redirectURI string) string {
+	if isVKNativeRedirectURI(redirectURI) {
+		return "mobile"
+	}
+	return "page"
+}
+
+func isMobileRedirectURI(redirectURI string) bool {
+	return strings.HasPrefix(redirectURI, "vk") || strings.HasPrefix(redirectURI, "inbetwin://")
+}
+
+func isVKNativeRedirectURI(redirectURI string) bool {
+	return strings.HasPrefix(redirectURI, "vk")
 }
 
 // ─── Data collection: user-level ─────────────────────────────────────────────
@@ -569,6 +821,7 @@ func (s *VKService) ListIntegrations(ctx context.Context, userID uuid.UUID) ([]*
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			i.id, i.user_id, i.group_id, i.group_name, i.group_screen_name, i.group_photo,
+			COALESCE(octet_length(i.group_token_enc), 0) AS token_len,
 			i.is_active, i.connected_at,
 			(SELECT COUNT(*) FROM vk_posts p WHERE p.integration_id=i.id) AS posts_count,
 			(SELECT COUNT(*) FROM vk_messages m WHERE m.integration_id=i.id) AS message_count,
@@ -585,14 +838,16 @@ func (s *VKService) ListIntegrations(ctx context.Context, userID uuid.UUID) ([]*
 	for rows.Next() {
 		i := &models.VKIntegration{}
 		var groupName, screenName, photo sql.NullString
+		var tokenLen int
 		if err := rows.Scan(&i.ID, &i.UserID, &i.GroupID,
-			&groupName, &screenName, &photo,
+			&groupName, &screenName, &photo, &tokenLen,
 			&i.IsActive, &i.ConnectedAt, &i.PostsCount, &i.MessageCount, &i.LeadCount); err != nil {
 			return nil, err
 		}
 		i.GroupName = groupName.String
 		i.GroupScreenName = screenName.String
 		i.GroupPhoto = photo.String
+		i.CommunityAccessEnabled = tokenLen > 0
 		i.ContextReady = i.PostsCount > 0 || i.MessageCount > 0
 		list = append(list, i)
 	}
@@ -677,6 +932,9 @@ func (s *VKService) sendMessageInternal(ctx context.Context, userID uuid.UUID, i
 	if err != nil {
 		return 0, err
 	}
+	if strings.TrimSpace(groupToken) == "" {
+		return 0, fmt.Errorf("community_oauth_required: для сообщений сначала включите доступ сообщества")
+	}
 
 	humanDelayVK(ctx)
 
@@ -706,6 +964,9 @@ func (s *VKService) EnrichLead(ctx context.Context, userID uuid.UUID, integratio
 		return nil, err
 	}
 	_ = integ
+	if strings.TrimSpace(groupToken) == "" {
+		return nil, fmt.Errorf("community_oauth_required: для лидов сначала включите доступ сообщества")
+	}
 
 	client := vkapi.NewClient(groupToken, 0)
 	users, err := client.UsersGet(ctx, []int64{vkUserID})
@@ -790,19 +1051,27 @@ func (s *VKService) StartAllWorkers(ctx context.Context) {
 
 	for rows.Next() {
 		i := &models.VKIntegration{}
+		var groupName, screenName, groupPhoto, longPollTS sql.NullString
 		if err := rows.Scan(
 			&i.ID, &i.UserID, &i.GroupID,
 			&i.GroupTokenEnc, &i.GroupTokenIV,
-			&i.GroupName, &i.GroupScreenName, &i.GroupPhoto,
-			&i.LongPollTs,
+			&groupName, &screenName, &groupPhoto,
+			&longPollTS,
 		); err != nil {
 			log.Printf("[vk] StartAllWorkers: scan: %v", err)
 			continue
 		}
+		i.GroupName = groupName.String
+		i.GroupScreenName = screenName.String
+		i.GroupPhoto = groupPhoto.String
+		i.LongPollTs = longPollTS.String
 
 		groupToken, err := s.decryptToken(i.GroupTokenEnc, i.GroupTokenIV)
 		if err != nil {
 			log.Printf("[vk] StartAllWorkers: decrypt token for %s: %v", i.ID, err)
+			continue
+		}
+		if strings.TrimSpace(groupToken) == "" {
 			continue
 		}
 		go s.startWorker(ctx, i, groupToken)
@@ -939,6 +1208,9 @@ func (s *VKService) loadIntegration(ctx context.Context, userID, integrationID u
 	i.GroupName = groupName.String
 	i.GroupScreenName = screenName.String
 	i.LongPollTs = longPollTS.String
+	if len(i.GroupTokenEnc) == 0 {
+		return i, "", nil
+	}
 	token, err := s.decryptToken(i.GroupTokenEnc, i.GroupTokenIV)
 	return i, token, err
 }
@@ -1075,6 +1347,9 @@ func (s *VKService) encryptToken(plain []byte) (enc, iv []byte, err error) {
 }
 
 func (s *VKService) decryptToken(enc, iv []byte) (string, error) {
+	if len(enc) == 0 {
+		return "", nil
+	}
 	if s.enc == nil {
 		return string(enc), nil
 	}
