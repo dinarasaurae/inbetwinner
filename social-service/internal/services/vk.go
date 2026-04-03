@@ -161,8 +161,24 @@ func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platfo
 // We keep this preparatory step close to the historically working flow:
 // the same browser-based authorize URL with code exchange, because the old
 // auto-token path relied on that auth surface being reused for group OAuth.
+//
+// For android/ios the web app (54511648) is used intentionally.
+// The platform-specific apps (54511649/54511650) only have vk{id}://vk.ru/blank.html
+// registered as redirect URIs for VK ID SDK — oauth.vk.com rejects any other scheme
+// with a Security Error.  The web app's server-side callback URL is already registered
+// and the handler redirects the browser to inbetwin://vk-callback after token exchange,
+// which the app intercepts via its intent filter.  Both wizard steps then run on
+// oauth.vk.com so the browser session is shared and VK skips the second login prompt.
 func (s *VKService) UserLegacyOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
-	pc := s.cfg.VKLegacyMobilePlatform(platform)
+	var pc config.VKPlatformConfig
+	if platform == "android" || platform == "ios" {
+		// Use web app with its registered HTTPS redirect URI.
+		// Group OAuth (step 2) also uses the web app, so both steps share
+		// the same oauth.vk.com browser session — no second login needed.
+		pc = s.cfg.VKPlatform("web")
+	} else {
+		pc = s.cfg.VKLegacyMobilePlatform(platform)
+	}
 	if pc.AppID == "" {
 		return "", "", false, fmt.Errorf("VK app ID not configured for platform %q", platform)
 	}
@@ -219,6 +235,11 @@ func (s *VKService) UserOAuthCallback(ctx context.Context, code, state, deviceID
 	if !ok {
 		return nil, fmt.Errorf("invalid_state: OAuth state not found or expired")
 	}
+	// Legacy wizard flow (UserLegacyOAuthStart) stores no codeVerifier because
+	// it uses oauth.vk.com (not VK ID 2.1 PKCE).  Route accordingly.
+	if pending.codeVerifier == "" {
+		return s.finishUserOAuthLegacy(ctx, code, pending)
+	}
 	return s.finishUserOAuth(ctx, code, deviceID, pending)
 }
 
@@ -259,7 +280,14 @@ func (s *VKService) finishUserOAuth(ctx context.Context, code, deviceID string, 
 }
 
 func (s *VKService) finishUserOAuthLegacy(ctx context.Context, code string, pending pendingOAuth) (*models.VKUserConnection, error) {
-	pc := s.cfg.VKLegacyMobilePlatform(pending.platform)
+	// For android/ios the start used the web app (see UserLegacyOAuthStart),
+	// so the exchange must also use web app credentials.
+	var pc config.VKPlatformConfig
+	if pending.platform == "android" || pending.platform == "ios" {
+		pc = s.cfg.VKPlatform("web")
+	} else {
+		pc = s.cfg.VKLegacyMobilePlatform(pending.platform)
+	}
 
 	resp, err := s.exchangeCode(ctx, code, pc)
 	if err != nil {
