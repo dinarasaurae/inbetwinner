@@ -162,20 +162,21 @@ func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platfo
 // the same browser-based authorize URL with code exchange, because the old
 // auto-token path relied on that auth surface being reused for group OAuth.
 //
-// For android/ios the web app (54511648) is used intentionally.
-// The platform-specific apps (54511649/54511650) only have vk{id}://vk.ru/blank.html
-// registered as redirect URIs for VK ID SDK — oauth.vk.com rejects any other scheme
-// with a Security Error.  The web app's server-side callback URL is already registered
-// and the handler redirects the browser to inbetwin://vk-callback after token exchange,
-// which the app intercepts via its intent filter.  Both wizard steps then run on
-// oauth.vk.com so the browser session is shared and VK skips the second login prompt.
+// For android/ios VKCommunityPlatform (web app 54511648, VKGroupRedirectURI) is used:
+//   - VKGroupRedirectURI is the only HTTPS callback URL registered in VK app settings;
+//     any other redirect_uri (including inbetwin://, vk{id}://vk.ru, or the user
+//     callback URL) triggers a Security Error from oauth.vk.com.
+//   - Group OAuth (step 2) uses the same app + redirect URI, so both steps land on
+//     the same oauth.vk.com browser session — VK skips the second login prompt.
+//   - The server callback (/vk/oauth/callback) detects user vs group OAuth by
+//     checking groupID == 0 in the pending state and redirects accordingly.
 func (s *VKService) UserLegacyOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
 	var pc config.VKPlatformConfig
 	if platform == "android" || platform == "ios" {
-		// Use web app with its registered HTTPS redirect URI.
-		// Group OAuth (step 2) also uses the web app, so both steps share
-		// the same oauth.vk.com browser session — no second login needed.
-		pc = s.cfg.VKPlatform("web")
+		// Use the community platform: web app + VKGroupRedirectURI.
+		// This is the only redirect URI registered in VK settings, so it is
+		// the only one that does not produce a Security Error.
+		pc = s.cfg.VKCommunityPlatform()
 	} else {
 		pc = s.cfg.VKLegacyMobilePlatform(platform)
 	}
@@ -226,6 +227,14 @@ func (s *VKService) UserOAuthExchange(ctx context.Context, req models.VKUserOAut
 		return s.finishUserOAuthLegacy(ctx, req.Code, pending)
 	}
 	return s.finishUserOAuth(ctx, req.Code, req.DeviceID, pending)
+}
+
+// IsUserOAuthState returns true when state belongs to a user OAuth flow
+// (groupID == 0), false for group/community OAuth flows.
+// Used by the shared /vk/oauth/callback handler to route correctly.
+func (s *VKService) IsUserOAuthState(state string) bool {
+	pending, ok := s.peekState(state)
+	return ok && pending.groupID == 0
 }
 
 // UserOAuthCallback is called by the server-side web callback
@@ -280,11 +289,11 @@ func (s *VKService) finishUserOAuth(ctx context.Context, code, deviceID string, 
 }
 
 func (s *VKService) finishUserOAuthLegacy(ctx context.Context, code string, pending pendingOAuth) (*models.VKUserConnection, error) {
-	// For android/ios the start used the web app (see UserLegacyOAuthStart),
-	// so the exchange must also use web app credentials.
+	// For android/ios the start used VKCommunityPlatform (see UserLegacyOAuthStart),
+	// so the exchange must use the same credentials.
 	var pc config.VKPlatformConfig
 	if pending.platform == "android" || pending.platform == "ios" {
-		pc = s.cfg.VKPlatform("web")
+		pc = s.cfg.VKCommunityPlatform()
 	} else {
 		pc = s.cfg.VKLegacyMobilePlatform(pending.platform)
 	}
