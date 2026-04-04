@@ -194,9 +194,13 @@ func (s *VKService) UserLegacyOAuthStart(ctx context.Context, userID uuid.UUID, 
 	}
 	s.oauthMu.Unlock()
 
+	// scope: "groups" is blocked for VK ID web-apps (54511648) on oauth.vk.com
+	// and causes a Security Error.  "offline" gives a permanent token; "wall"
+	// allows reading posts.  Admin-group listing uses groups.get with the user
+	// token which works with offline scope.
 	authURL = fmt.Sprintf(
 		"%s/authorize?client_id=%s&display=page&redirect_uri=%s"+
-			"&scope=groups,wall,offline&response_type=code&v=%s&state=%s",
+			"&scope=wall,offline&response_type=code&v=%s&state=%s",
 		vkapi.OAuthBase,
 		url.QueryEscape(pc.AppID),
 		url.QueryEscape(pc.RedirectURI),
