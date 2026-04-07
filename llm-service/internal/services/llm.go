@@ -342,12 +342,12 @@ func (s *LLMService) fetchRAGContext(ctx context.Context, workspaceID uuid.UUID,
 // SocialMessageRequest carries a VK inbound message plus the integration's
 // policy context, sent from social-service to this endpoint.
 type SocialMessageRequest struct {
-	WorkspaceID   uuid.UUID            `json:"workspace_id"`
-	IntegrationID string               `json:"integration_id"`
-	ChatUserID    string               `json:"chat_user_id"`
-	Platform      string               `json:"platform"`
-	Message       string               `json:"message"`
-	Context       *SocialMsgContext    `json:"context,omitempty"`
+	WorkspaceID   uuid.UUID         `json:"workspace_id"`
+	IntegrationID string            `json:"integration_id"`
+	ChatUserID    string            `json:"chat_user_id"`
+	Platform      string            `json:"platform"`
+	Message       string            `json:"message"`
+	Context       *SocialMsgContext `json:"context,omitempty"`
 }
 
 type SocialMsgContext struct {
@@ -432,20 +432,26 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 	}
 
 	compReq := openai.ChatCompletionRequest{
-			Model: params.model,
+		Model: params.model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: req.Message},
 		},
-		Temperature: params.temperature,
-		MaxTokens:   600,
-		Tools:       []openai.Tool{decisionTool},
-		ToolChoice:  "required",
+		Temperature:       params.temperature,
+		MaxTokens:         600,
+		Tools:             []openai.Tool{decisionTool},
+		ToolChoice:        openai.ToolChoice{Type: openai.ToolTypeFunction, Function: openai.ToolFunction{Name: "vk_reply_decision"}},
+		ParallelToolCalls: false,
 	}
 
 	resp, err := s.provider.CreateChatCompletion(ctx, compReq)
 	if err != nil {
-		return nil, fmt.Errorf("%s social provider: %w", s.provider.Name(), err)
+		log.Printf("[vk-agent][llm] tool-call path failed for provider=%s model=%s: %v", s.provider.Name(), params.model, err)
+		decision, fallbackErr := s.processSocialMessageJSONFallback(ctx, params, req, agentID, ragContext, snippets)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("%s social provider: %w", s.provider.Name(), err)
+		}
+		return decision, nil
 	}
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("openai social: no choices")
@@ -467,16 +473,31 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 	}
 	if len(choice.Message.ToolCalls) > 0 {
 		if err := json.Unmarshal([]byte(choice.Message.ToolCalls[0].Function.Arguments), &args); err != nil {
-			return nil, fmt.Errorf("parse decision args: %w", err)
+			log.Printf("[vk-agent][llm] tool args parse failed, retrying via JSON fallback: %v", err)
+			decision, fallbackErr := s.processSocialMessageJSONFallback(ctx, params, req, agentID, ragContext, snippets)
+			if fallbackErr != nil {
+				return nil, fmt.Errorf("parse decision args: %w", err)
+			}
+			return decision, nil
 		}
 	} else {
-		// Fallback: model returned plain text instead of a tool call.
-		args.Mode = "draft"
-		args.DraftText = strings.TrimSpace(choice.Message.Content)
-		args.Confidence = 0.5
-		args.Intent = "unknown"
-		args.SafeIntent = false
-		args.Rationale = "plain-text fallback"
+		parsed, err := parseVKDecisionContent(choice.Message.Content)
+		if err != nil {
+			// Fallback: model returned plain text instead of a tool call.
+			args.Mode = "draft"
+			args.DraftText = strings.TrimSpace(choice.Message.Content)
+			args.Confidence = 0.5
+			args.Intent = "unknown"
+			args.SafeIntent = false
+			args.Rationale = "plain-text fallback"
+		} else {
+			args.Mode = parsed.Mode
+			args.DraftText = parsed.DraftText
+			args.Confidence = parsed.Confidence
+			args.Intent = parsed.Intent
+			args.SafeIntent = parsed.SafeIntent
+			args.Rationale = parsed.Rationale
+		}
 	}
 
 	// Override mode based on integration policy: if context says auto_reply
@@ -501,10 +522,61 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 	return decision, nil
 }
 
+func (s *LLMService) processSocialMessageJSONFallback(
+	ctx context.Context,
+	params runtimeParams,
+	req SocialMessageRequest,
+	agentID *uuid.UUID,
+	ragContext string,
+	snippets []string,
+) (*VKOrchestrationDecision, error) {
+	systemPrompt := s.buildVKJSONSystemPrompt(params.systemPmt, req.Context, ragContext)
+	compReq := openai.ChatCompletionRequest{
+		Model: params.model,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+			{Role: openai.ChatMessageRoleUser, Content: req.Message},
+		},
+		Temperature: params.temperature,
+		MaxTokens:   600,
+	}
+
+	resp, err := s.provider.CreateChatCompletion(ctx, compReq)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("openai social json fallback: no choices")
+	}
+
+	parsed, err := parseVKDecisionContent(resp.Choices[0].Message.Content)
+	if err != nil {
+		return nil, fmt.Errorf("parse social json fallback: %w", err)
+	}
+	if parsed.Mode == "auto_reply" && req.Context != nil && !req.Context.AutoReplyEnabled {
+		parsed.Mode = "draft"
+	}
+
+	return &VKOrchestrationDecision{
+		Mode:              parsed.Mode,
+		DraftText:         parsed.DraftText,
+		Confidence:        parsed.Confidence,
+		Intent:            parsed.Intent,
+		SafeIntent:        parsed.SafeIntent,
+		Rationale:         parsed.Rationale,
+		KnowledgeSnippets: snippets,
+		PromptTokens:      resp.Usage.PromptTokens,
+		CompletionTokens:  resp.Usage.CompletionTokens,
+		TokensUsed:        resp.Usage.TotalTokens,
+		AgentID:           agentID,
+	}, nil
+}
+
 func (s *LLMService) buildVKSystemPrompt(agentBase string, ctx *SocialMsgContext, ragContext string) string {
 	sb := strings.Builder{}
 	sb.WriteString(agentBase)
 	sb.WriteString("\n\nТы отвечаешь от лица VK-сообщества бизнеса.\n")
+	sb.WriteString("Отвечай полностью на языке пользователя. Если сообщение на русском, не используй английские слова и фразы без явной необходимости.\n")
 
 	if ctx != nil {
 		tone := ctx.ToneOfVoice
@@ -543,7 +615,63 @@ func (s *LLMService) buildVKSystemPrompt(agentBase string, ctx *SocialMsgContext
 	return sb.String()
 }
 
+func (s *LLMService) buildVKJSONSystemPrompt(agentBase string, ctx *SocialMsgContext, ragContext string) string {
+	sb := strings.Builder{}
+	sb.WriteString(s.buildVKSystemPrompt(agentBase, ctx, ragContext))
+	sb.WriteString(`
+
+Вместо вызова функции верни только один JSON-объект без markdown, без code fences и без пояснений.
+Строгая схема ответа:
+{"mode":"draft|auto_reply|escalate","draft_text":"...","confidence":0.0,"intent":"faq|hours|basic_prices|qualification|handoff|unknown","safe_intent":true,"rationale":"..."}
+`)
+	return sb.String()
+}
+
 // --- small helpers ---
+
+type vkDecisionArgs struct {
+	Mode       string  `json:"mode"`
+	DraftText  string  `json:"draft_text"`
+	Confidence float64 `json:"confidence"`
+	Intent     string  `json:"intent"`
+	SafeIntent bool    `json:"safe_intent"`
+	Rationale  string  `json:"rationale"`
+}
+
+func parseVKDecisionContent(content string) (*vkDecisionArgs, error) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty content")
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```json")
+		trimmed = strings.TrimPrefix(trimmed, "```JSON")
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		trimmed = strings.TrimSuffix(trimmed, "```")
+		trimmed = strings.TrimSpace(trimmed)
+	}
+
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start == -1 || end == -1 || end < start {
+		return nil, fmt.Errorf("json object not found")
+	}
+
+	var parsed vkDecisionArgs
+	if err := json.Unmarshal([]byte(trimmed[start:end+1]), &parsed); err != nil {
+		return nil, err
+	}
+	if parsed.Mode == "" {
+		return nil, fmt.Errorf("mode is required")
+	}
+	if parsed.Intent == "" {
+		parsed.Intent = "unknown"
+	}
+	if parsed.Rationale == "" {
+		parsed.Rationale = "json fallback"
+	}
+	return &parsed, nil
+}
 
 func coalesceStr(a, b string) string {
 	if a != "" {

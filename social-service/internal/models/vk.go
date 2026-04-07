@@ -23,21 +23,23 @@ type VKUserConnection struct {
 
 // VKIntegration represents a connected VK community (group).
 type VKIntegration struct {
-	ID              uuid.UUID `json:"id"`
-	UserID          uuid.UUID `json:"user_id"`
-	GroupID         int64     `json:"group_id"`
-	GroupTokenEnc   []byte    `json:"-"`
-	GroupTokenIV    []byte    `json:"-"`
-	GroupName       string    `json:"group_name"`
-	GroupScreenName string    `json:"group_screen_name"`
-	GroupPhoto      string    `json:"group_photo"`
-	LongPollTs      string    `json:"-"`
-	IsActive        bool      `json:"is_active"`
-	ConnectedAt     time.Time `json:"connected_at"`
-	PostsCount      int       `json:"posts_count,omitempty"`
-	MessageCount    int       `json:"message_count,omitempty"`
-	LeadCount       int       `json:"lead_count,omitempty"`
-	ContextReady    bool      `json:"context_ready,omitempty"`
+	ID                     uuid.UUID `json:"id"`
+	UserID                 uuid.UUID `json:"user_id"`
+	GroupID                int64     `json:"group_id"`
+	GroupTokenEnc          []byte    `json:"-"`
+	GroupTokenIV           []byte    `json:"-"`
+	GroupName              string    `json:"group_name"`
+	GroupScreenName        string    `json:"group_screen_name"`
+	GroupPhoto             string    `json:"group_photo"`
+	LongPollTs             string    `json:"-"`
+	IsActive               bool      `json:"is_active"`
+	ConnectedAt            time.Time `json:"connected_at"`
+	CommunityAccessEnabled bool      `json:"community_access_enabled,omitempty"`
+	MessagingEnabled       bool      `json:"messaging_enabled,omitempty"`
+	PostsCount             int       `json:"posts_count,omitempty"`
+	MessageCount           int       `json:"message_count,omitempty"`
+	LeadCount              int       `json:"lead_count,omitempty"`
+	ContextReady           bool      `json:"context_ready,omitempty"`
 }
 
 // ─── Data objects ─────────────────────────────────────────────────────────────
@@ -65,6 +67,7 @@ type VKMessage struct {
 	ID                    uuid.UUID `json:"id"`
 	IntegrationID         uuid.UUID `json:"integration_id"`
 	FromVKUserID          int64     `json:"from_vk_user_id"`
+	PeerID                *int64    `json:"peer_id,omitempty"`
 	MessageID             int64     `json:"message_id"`
 	ConversationMessageID *int64    `json:"conversation_message_id,omitempty"`
 	Text                  *string   `json:"text,omitempty"`
@@ -140,17 +143,39 @@ type VKUserOAuthStartResponse struct {
 // VK ID OAuth 2.1 (PKCE): code + state + device_id + platform
 // device_id is returned by VK in the redirect URI alongside the code.
 type VKUserOAuthExchangeRequest struct {
-	Code     string `json:"code"`
-	State    string `json:"state"`
-	DeviceID string `json:"device_id"`          // VK ID PKCE — returned in callback
-	Platform string `json:"platform"`            // android | ios
+	Code        string `json:"code"`
+	State       string `json:"state"`
+	DeviceID    string `json:"device_id"` // VK ID PKCE — returned in callback
+	Platform    string `json:"platform"`  // android | ios
+	AccessToken string `json:"access_token,omitempty"`
+	VKUserID    int64  `json:"vk_user_id,omitempty"`
+}
+
+// VKUserOAuthImportRequest is sent by the mobile app right after VK app login.
+// It lets social-service reuse the already-issued VK access token instead of
+// forcing the user through a second account OAuth step.
+type VKUserOAuthImportRequest struct {
+	AccessToken string `json:"access_token"`
+	VKUserID    int64  `json:"vk_user_id,omitempty"`
+	FirstName   string `json:"first_name,omitempty"`
+	LastName    string `json:"last_name,omitempty"`
+	Platform    string `json:"platform"`
 }
 
 // ConnectVKRequest is sent by the mobile app to complete group OAuth.
 type ConnectVKRequest struct {
-	Code    string `json:"code"`
-	State   string `json:"state"`
-	GroupID int64  `json:"group_id"`
+	Code        string `json:"code"`
+	State       string `json:"state"`
+	GroupID     int64  `json:"group_id"`
+	DeviceID    string `json:"device_id,omitempty"` // VK ID 2.0 PKCE — returned in callback
+	AccessToken string `json:"access_token,omitempty"`
+}
+
+// VKCommunityTokenSaveRequest stores a manually created community token from
+// VK community settings so messaging can work without a second browser login.
+type VKCommunityTokenSaveRequest struct {
+	IntegrationID  string `json:"integration_id"`
+	CommunityToken string `json:"community_token"`
 }
 
 // OAuthStartResponse is returned by GET /vk/oauth/start (group OAuth).

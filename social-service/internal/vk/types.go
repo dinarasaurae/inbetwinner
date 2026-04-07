@@ -3,6 +3,7 @@ package vk
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // APIVersion is the VK API version used across all requests.
@@ -36,14 +37,35 @@ type Response[T any] struct {
 	Error    *APIError `json:"error,omitempty"`
 }
 
+// APIErrorParam is a single key-value pair from the request_params VK debug field.
+type APIErrorParam struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 // APIError represents a VK API error.
 type APIError struct {
-	Code    int    `json:"error_code"`
-	Message string `json:"error_msg"`
+	Code          int             `json:"error_code"`
+	Message       string          `json:"error_msg"`
+	RequestParams []APIErrorParam `json:"request_params,omitempty"`
 }
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("vk error %d: %s", e.Code, e.Message)
+}
+
+// DebugString returns the full error including request_params for diagnostics.
+func (e *APIError) DebugString() string {
+	if len(e.RequestParams) == 0 {
+		return e.Error()
+	}
+	params := make([]string, 0, len(e.RequestParams))
+	for _, p := range e.RequestParams {
+		if p.Key != "access_token" { // never log tokens
+			params = append(params, p.Key+"="+p.Value)
+		}
+	}
+	return fmt.Sprintf("vk error %d: %s | request_params: %s", e.Code, e.Message, strings.Join(params, " "))
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -83,8 +105,8 @@ type Occupation struct {
 
 // ─── Groups ───────────────────────────────────────────────────────────────────
 
-// GroupFields to fetch when listing admin groups.
-const GroupFields = "photo_200,screen_name,members_count"
+// GroupFields to fetch when listing admin groups or resolving a specific group.
+const GroupFields = "photo_200,screen_name,members_count,is_admin,admin_level"
 
 // Group represents a VK community/group.
 type Group struct {

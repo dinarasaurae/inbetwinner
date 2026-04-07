@@ -16,7 +16,7 @@ import (
 
 // VKHandler handles VK integration HTTP routes.
 type VKHandler struct {
-	svc         *services.VKService
+	svc     *services.VKService
 	frontendURL string
 }
 
@@ -78,33 +78,6 @@ func (h *VKHandler) UserOAuthExchange(c fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(jwtlib.NewSuccessResponse("vk_user_connected", conn))
 }
 
-// UserOAuthImport handles POST /social/vk/oauth/user/import
-// Called by the mobile app immediately after app login via VK so step 1 in
-// social connections can reuse the same VK session without a second login.
-func (h *VKHandler) UserOAuthImport(c fiber.Ctx) error {
-	userID, ok := jwtlib.GetUserID(c)
-	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
-	}
-
-	var req models.VKUserOAuthImportRequest
-	if err := c.Bind().JSON(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", err.Error()))
-	}
-	if strings.TrimSpace(req.AccessToken) == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "access_token is required"))
-	}
-
-	conn, err := h.svc.ImportUserOAuthToken(c.Context(), userID, req.AccessToken, normalisePlatform(req.Platform))
-	if err != nil {
-		return mapVKError(c, err)
-	}
-
-	return c.Status(fiber.StatusCreated).JSON(jwtlib.NewSuccessResponse("vk_user_connected", conn))
-}
-
 // UserOAuthCallback handles GET /social/vk/oauth/user/callback   (PUBLIC — no JWT)
 // VK redirects the user's browser here after web OAuth.
 func (h *VKHandler) UserOAuthCallback(c fiber.Ctx) error {
@@ -145,7 +118,7 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 	groupRef := c.Query("group_ref")
 	var (
 		groupID int64
-		err     error
+		err error
 	)
 	if groupRef != "" {
 		groupID, err = h.svc.ResolveGroupRef(c.Context(), userID, groupRef)
@@ -164,7 +137,8 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 
 	authURL, state, err := h.svc.OAuthStart(c.Context(), userID, groupID, platform)
 	if err != nil {
-		return mapVKError(c, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(
+			jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))
 	}
 
 	return c.JSON(jwtlib.NewSuccessResponse("", models.OAuthStartResponse{
@@ -173,67 +147,6 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 		Platform: platform,
 		GroupID:  groupID,
 	}))
-}
-
-// CommunityAccessStart handles GET /social/vk/community-access/start?integration_id={uuid}&platform=...
-// Used after lightweight group connect to enable community messaging access.
-func (h *VKHandler) CommunityAccessStart(c fiber.Ctx) error {
-	userID, ok := jwtlib.GetUserID(c)
-	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
-	}
-
-	integrationIDStr := c.Query("integration_id")
-	integrationID, err := uuid.Parse(integrationIDStr)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_integration_id", "Provide integration_id"))
-	}
-
-	platform := normalisePlatform(c.Query("platform"))
-	authURL, state, groupID, err := h.svc.CommunityAccessStart(c.Context(), userID, integrationID, platform)
-	if err != nil {
-		return mapVKError(c, err)
-	}
-
-	return c.JSON(jwtlib.NewSuccessResponse("", models.OAuthStartResponse{
-		AuthURL:  authURL,
-		State:    state,
-		Platform: platform,
-		GroupID:  groupID,
-	}))
-}
-
-// SaveCommunityToken handles POST /social/vk/community-access/token
-// Used as a no-browser alternative to community OAuth for messaging access.
-func (h *VKHandler) SaveCommunityToken(c fiber.Ctx) error {
-	userID, ok := jwtlib.GetUserID(c)
-	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
-	}
-
-	var req models.VKCommunityTokenSaveRequest
-	if err := c.Bind().JSON(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", err.Error()))
-	}
-	if strings.TrimSpace(req.IntegrationID) == "" || strings.TrimSpace(req.CommunityToken) == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "integration_id and community_token are required"))
-	}
-
-	integrationID, err := uuid.Parse(req.IntegrationID)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "integration_id must be a valid UUID"))
-	}
-
-	integ, err := h.svc.SaveCommunityToken(c.Context(), userID, integrationID, req.CommunityToken)
-	if err != nil {
-		return mapVKError(c, err)
-	}
-
-	return c.JSON(jwtlib.NewSuccessResponse("vk_community_access_enabled", integ))
 }
 
 // OAuthExchange handles POST /social/vk/oauth/exchange
@@ -249,12 +162,12 @@ func (h *VKHandler) OAuthExchange(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(
 			jwtlib.NewErrorResponse("invalid_request", err.Error()))
 	}
-	if req.State == "" || (req.Code == "" && strings.TrimSpace(req.AccessToken) == "") {
+	if req.Code == "" || req.State == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "state and either code or access_token are required"))
+			jwtlib.NewErrorResponse("invalid_request", "code and state are required"))
 	}
 
-	integ, err := h.svc.OAuthExchange(c.Context(), req.Code, req.State, strings.TrimSpace(req.AccessToken))
+	integ, err := h.svc.OAuthExchange(c.Context(), req.Code, req.State)
 	if err != nil {
 		return mapVKError(c, err)
 	}
@@ -263,9 +176,7 @@ func (h *VKHandler) OAuthExchange(c fiber.Ctx) error {
 }
 
 // OAuthCallback handles GET /social/vk/oauth/callback   (PUBLIC — no JWT)
-// VK redirects the browser here for both group OAuth AND the legacy user OAuth wizard
-// step (when android/ios routes user OAuth through the group callback URL because it is
-// the only registered HTTPS redirect URI for the VK app).
+// VK redirects the user's browser here after web group OAuth.
 func (h *VKHandler) OAuthCallback(c fiber.Ctx) error {
 	code := c.Query("code")
 	state := c.Query("state")
@@ -274,24 +185,10 @@ func (h *VKHandler) OAuthCallback(c fiber.Ctx) error {
 
 	if errParam != "" {
 		desc := c.Query("error_description")
-		// Route error to the correct return URL depending on flow type.
-		if h.svc.IsUserOAuthState(state) {
-			return c.Redirect().To(userOAuthReturnURL(platform, state, "", desc, h.frontendURL))
-		}
 		return c.Redirect().To(groupOAuthErrorReturnURL(platform, state, desc, h.frontendURL))
 	}
 	if code == "" || state == "" {
 		return c.Redirect().To(groupOAuthErrorReturnURL(platform, state, "missing_params", h.frontendURL))
-	}
-
-	// Legacy wizard user OAuth (step 1) arrives here when android/ios routes through
-	// VKGroupRedirectURI.  Detect by groupID == 0 in the pending state.
-	if h.svc.IsUserOAuthState(state) {
-		_, err := h.svc.UserOAuthCallback(c.Context(), code, state, "")
-		if err != nil {
-			return c.Redirect().To(userOAuthReturnURL(platform, state, "", err.Error(), h.frontendURL))
-		}
-		return c.Redirect().To(userOAuthReturnURL(platform, state, "1", "", h.frontendURL))
 	}
 
 	integ, platform, err := h.svc.OAuthCallback(c.Context(), code, state)
@@ -315,12 +212,6 @@ func userOAuthReturnURL(platform, state, connected, reason, frontendURL string) 
 		}
 		return fmt.Sprintf("https://inbetwin.ru/vk-redirect?legacy_user_connected=%s&state=%s", connected, state)
 	default:
-		if shouldUseAppCallbackFallback(frontendURL) {
-			if reason != "" {
-				return fmt.Sprintf("inbetwin://vk-callback?error=%s&state=%s", url.QueryEscape(reason), state)
-			}
-			return fmt.Sprintf("inbetwin://vk-callback?legacy_user_connected=%s&state=%s", connected, state)
-		}
 		if reason != "" {
 			return fmt.Sprintf("%s/vk-error?reason=%s", frontendURL, reason)
 		}
@@ -341,12 +232,6 @@ func groupOAuthReturnURL(platform, state string, integ *models.VKIntegration, fr
 			state, integ.GroupID, integ.ID.String(),
 		)
 	default:
-		if shouldUseAppCallbackFallback(frontendURL) {
-			return fmt.Sprintf(
-				"inbetwin://vk-callback?group_connected=1&state=%s&group_id=%d&integration_id=%s",
-				state, integ.GroupID, integ.ID.String(),
-			)
-		}
 		return fmt.Sprintf(
 			"%s/dashboard/vk/groups?group_connected=%d",
 			frontendURL, integ.GroupID,
@@ -361,23 +246,8 @@ func groupOAuthErrorReturnURL(platform, state, reason, frontendURL string) strin
 	case "ios":
 		return fmt.Sprintf("https://inbetwin.ru/vk-redirect?error=%s&state=%s", url.QueryEscape(reason), state)
 	default:
-		if shouldUseAppCallbackFallback(frontendURL) {
-			return fmt.Sprintf("inbetwin://vk-callback?error=%s&state=%s", url.QueryEscape(reason), state)
-		}
 		return fmt.Sprintf("%s/vk-error?reason=%s", frontendURL, reason)
 	}
-}
-
-func shouldUseAppCallbackFallback(frontendURL string) bool {
-	if strings.TrimSpace(frontendURL) == "" {
-		return true
-	}
-	u, err := url.Parse(frontendURL)
-	if err != nil {
-		return true
-	}
-	host := strings.ToLower(u.Hostname())
-	return host == "" || host == "localhost" || host == "127.0.0.1"
 }
 
 // ─── Data endpoints ───────────────────────────────────────────────────────────
@@ -588,6 +458,62 @@ func (h *VKHandler) EnrichLead(c fiber.Ctx) error {
 	return c.JSON(jwtlib.NewSuccessResponse("", profile))
 }
 
+// SaveCommunityTokenByInteg handles POST /social/vk/community-access/token
+// Mobile-friendly: accepts {integration_id, community_token} in body.
+func (h *VKHandler) SaveCommunityTokenByInteg(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	var body struct {
+		IntegrationID string `json:"integration_id"`
+		CommunityToken string `json:"community_token"`
+	}
+	if err := c.Bind().JSON(&body); err != nil || strings.TrimSpace(body.CommunityToken) == "" || strings.TrimSpace(body.IntegrationID) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse("invalid_request", "integration_id and community_token are required"))
+	}
+
+	integID, err := uuid.Parse(body.IntegrationID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse("invalid_request", "invalid integration_id"))
+	}
+
+	integ, err := h.svc.SaveCommunityTokenByInteg(c.Context(), userID, integID, strings.TrimSpace(body.CommunityToken))
+	if err != nil {
+		return mapVKError(c, err)
+	}
+	return c.JSON(jwtlib.NewSuccessResponse("community token saved", integ))
+}
+
+// SaveCommunityToken handles POST /social/vk/groups/:group_id/token
+// Allows saving a manually created community token (from VK community management panel).
+func (h *VKHandler) SaveCommunityToken(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	groupIDStr := c.Params("group_id")
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil || groupID <= 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse("invalid_group_id", "group_id must be a positive integer"))
+	}
+
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := c.Bind().JSON(&body); err != nil || strings.TrimSpace(body.Token) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse("invalid_request", "token is required"))
+	}
+
+	integ, err := h.svc.SaveCommunityToken(c.Context(), userID, groupID, strings.TrimSpace(body.Token))
+	if err != nil {
+		return mapVKError(c, err)
+	}
+	return c.JSON(jwtlib.NewSuccessResponse("community token saved", integ))
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func normalisePlatform(p string) string {
@@ -606,10 +532,6 @@ func mapVKError(c fiber.Ctx, err error) error {
 	switch {
 	case strings.Contains(msg, "vk error 1051"):
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(jwtlib.NewErrorResponse("profile_type_unsupported", msg))
-	case strings.Contains(msg, "mobile_direct_connect_failed"):
-		return c.Status(fiber.StatusUnprocessableEntity).JSON(jwtlib.NewErrorResponse("direct_connect_failed", msg))
-	case strings.Contains(msg, "invalid_group_token"):
-		return c.Status(fiber.StatusUnprocessableEntity).JSON(jwtlib.NewErrorResponse("invalid_group_token", msg))
 	case strings.Contains(msg, "not_found"):
 		return c.Status(fiber.StatusNotFound).JSON(jwtlib.NewErrorResponse("not_found", msg))
 	case strings.Contains(msg, "unauthorized") || strings.Contains(msg, "invalid_state"):

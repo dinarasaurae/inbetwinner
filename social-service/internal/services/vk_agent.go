@@ -116,7 +116,7 @@ func (s *VKService) ApproveAndSendDraft(ctx context.Context, userID, draftID uui
 	if text == "" {
 		text = draft.DraftText
 	}
-	sentID, err := s.sendMessageInternal(ctx, userID, integ.ID, draft.FromVKUserID, text)
+	sentID, err := s.sendMessageInternal(ctx, userID, integ.ID, draft.FromVKUserID, draft.PeerID, text)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +141,8 @@ func (s *VKService) ApproveAndSendDraft(ctx context.Context, userID, draftID uui
 func (s *VKService) ensureAgentSettings(ctx context.Context, integrationID uuid.UUID) (*models.VKAgentSettings, error) {
 	settings := &models.VKAgentSettings{}
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO vk_agent_settings (integration_id)
-		VALUES ($1)
+		INSERT INTO vk_agent_settings (integration_id, orchestration_mode)
+		VALUES ($1, '')
 		ON CONFLICT (integration_id) DO UPDATE SET integration_id=EXCLUDED.integration_id
 		RETURNING id, integration_id, draft_first, auto_reply_enabled, safe_intents, tone_of_voice, forbidden_promises, escalation_policy, rag_enabled, orchestration_mode, created_at, updated_at
 	`, integrationID).Scan(&settings.ID, &settings.IntegrationID, &settings.DraftFirst, &settings.AutoReplyEnabled, pq.Array(&settings.SafeIntents), &settings.ToneOfVoice, pq.Array(&settings.ForbiddenPromises), &settings.EscalationPolicy, &settings.RAGEnabled, &settings.OrchestrationMode, &settings.CreatedAt, &settings.UpdatedAt)
@@ -277,6 +277,7 @@ func (s *VKService) processInboundMessageLLM(ctx context.Context, userID, integr
 		IntegrationID:     integrationID,
 		InboundMessageID:  inbound.ID,
 		FromVKUserID:      inbound.FromVKUserID,
+		PeerID:            inbound.PeerID,
 		Intent:            decision.Intent,
 		Confidence:        decision.Confidence,
 		SafeIntent:        decision.SafeIntent,
@@ -289,7 +290,7 @@ func (s *VKService) processInboundMessageLLM(ctx context.Context, userID, integr
 
 	// Auto-send if orchestrator says auto_reply and policy allows.
 	if decision.Mode == "auto_reply" && settings.AutoReplyEnabled {
-		sentID, sendErr := s.sendMessageInternal(ctx, userID, integrationID, inbound.FromVKUserID, draft.DraftText)
+		sentID, sendErr := s.sendMessageInternal(ctx, userID, integrationID, inbound.FromVKUserID, inbound.PeerID, draft.DraftText)
 		if sendErr != nil {
 			draft.Status = models.VKDraftStatusFailed
 			log.Printf("[vk-agent][llm] auto-send failed: %v", sendErr)
@@ -358,6 +359,7 @@ func (s *VKService) generateDraftForMessage(
 		IntegrationID:     integrationID,
 		InboundMessageID:  inbound.ID,
 		FromVKUserID:      inbound.FromVKUserID,
+		PeerID:            inbound.PeerID,
 		Intent:            intent.Intent,
 		Confidence:        intent.Confidence,
 		SafeIntent:        intent.Safe,
@@ -369,7 +371,7 @@ func (s *VKService) generateDraftForMessage(
 	}
 
 	if allowAutoSend && settings.AutoReplyEnabled && isIntentAllowed(settings.SafeIntents, intent.Intent) && intent.Safe && intent.Confidence >= 0.84 {
-		sentID, sendErr := s.sendMessageInternal(ctx, userID, integrationID, inbound.FromVKUserID, draft.DraftText)
+		sentID, sendErr := s.sendMessageInternal(ctx, userID, integrationID, inbound.FromVKUserID, inbound.PeerID, draft.DraftText)
 		if sendErr != nil {
 			draft.Status = models.VKDraftStatusFailed
 		} else {
@@ -580,14 +582,18 @@ func (s *VKService) loadInboundMessage(ctx context.Context, userID, integrationI
 		return nil, err
 	}
 	msg := &models.VKWorkspaceMessage{}
+	var peerID sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, from_vk_user_id, COALESCE(text,''), is_incoming, is_processed, received_at
+		SELECT id, from_vk_user_id, peer_id, COALESCE(text,''), is_incoming, is_processed, received_at
 		  FROM vk_messages
 		 WHERE id=$1 AND integration_id=$2 AND is_incoming=TRUE`,
 		messageID, integrationID,
-	).Scan(&msg.ID, &msg.FromVKUserID, &msg.Text, &msg.IsIncoming, &msg.IsProcessed, &msg.ReceivedAt)
+	).Scan(&msg.ID, &msg.FromVKUserID, &peerID, &msg.Text, &msg.IsIncoming, &msg.IsProcessed, &msg.ReceivedAt)
 	if err != nil {
 		return nil, fmt.Errorf("not_found: inbound message not found")
+	}
+	if peerID.Valid {
+		msg.PeerID = &peerID.Int64
 	}
 	return msg, nil
 }
@@ -610,20 +616,22 @@ func (s *VKService) loadDraft(ctx context.Context, userID, draftID uuid.UUID) (*
 	var fallbackReason sql.NullString
 	var usedAgentID uuid.NullUUID
 	var orchSource sql.NullString
+	var peerID sql.NullInt64
 	// group_screen_name and group_photo are nullable in vk_integrations.
 	var groupScreenName, groupPhoto sql.NullString
 	draft := &models.VKReplyDraft{}
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT d.id, d.integration_id, d.inbound_message_id, d.from_vk_user_id, d.intent, d.confidence, d.safe_intent, d.status, d.source, d.draft_text, d.rationale, d.knowledge_snippets, d.sent_message_id, d.approved_by, d.generated_at, d.approved_at, d.sent_at,
-		       d.orchestration_source, d.llm_latency_ms, d.fallback_reason, d.prompt_tokens, d.completion_tokens, d.used_agent_id, d.used_tools,
+		       d.orchestration_source, d.llm_latency_ms, d.fallback_reason, d.prompt_tokens, d.completion_tokens, d.used_agent_id, d.used_tools, m.peer_id,
 		       i.id, i.user_id, i.group_id, i.group_name, i.group_screen_name, i.group_photo, i.is_active, i.connected_at
 		  FROM vk_reply_drafts d
+		  LEFT JOIN vk_messages m ON m.id=d.inbound_message_id
 		  JOIN vk_integrations i ON i.id=d.integration_id
 		 WHERE d.id=$1 AND i.user_id=$2 AND i.is_active=TRUE`,
 		draftID, userID,
 	).Scan(&draft.ID, &draft.IntegrationID, &draft.InboundMessageID, &draft.FromVKUserID, &draft.Intent, &draft.Confidence, &draft.SafeIntent, &draft.Status, &draft.Source, &draft.DraftText, &draft.Rationale, &snippetsRaw, &sentID, &approvedBy, &draft.GeneratedAt, &draft.ApprovedAt, &draft.SentAt,
-		&orchSource, &latencyMs, &fallbackReason, &promptTok, &completionTok, &usedAgentID, &toolsRaw,
+		&orchSource, &latencyMs, &fallbackReason, &promptTok, &completionTok, &usedAgentID, &toolsRaw, &peerID,
 		&integ.ID, &integ.UserID, &integ.GroupID, &integ.GroupName, &groupScreenName, &groupPhoto, &integ.IsActive, &integ.ConnectedAt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("not_found: draft not found")
@@ -664,6 +672,9 @@ func (s *VKService) loadDraft(ctx context.Context, userID, draftID uuid.UUID) (*
 	if usedAgentID.Valid {
 		draft.UsedAgentID = &usedAgentID.UUID
 	}
+	if peerID.Valid {
+		draft.PeerID = &peerID.Int64
+	}
 	return draft, integ, nil
 }
 
@@ -675,11 +686,12 @@ type rowScanner interface {
 
 // scanOneDraft reads a single draft row that includes all observability columns.
 // The SELECT must include columns in this exact order:
-//   id, integration_id, inbound_message_id, from_vk_user_id, intent, confidence,
-//   safe_intent, status, source, draft_text, rationale, knowledge_snippets,
-//   sent_message_id, approved_by, generated_at, approved_at, sent_at,
-//   orchestration_source, llm_latency_ms, fallback_reason, prompt_tokens,
-//   completion_tokens, used_agent_id, used_tools
+//
+//	id, integration_id, inbound_message_id, from_vk_user_id, intent, confidence,
+//	safe_intent, status, source, draft_text, rationale, knowledge_snippets,
+//	sent_message_id, approved_by, generated_at, approved_at, sent_at,
+//	orchestration_source, llm_latency_ms, fallback_reason, prompt_tokens,
+//	completion_tokens, used_agent_id, used_tools
 func scanOneDraft(row rowScanner) (*models.VKReplyDraft, error) {
 	draft := &models.VKReplyDraft{}
 	var snippetsRaw, toolsRaw []byte

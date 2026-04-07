@@ -44,7 +44,7 @@ func main() {
 	authService := services.NewAuthService(db, jwtService)
 
 	authHandler := handlers.NewAuthHandler(authService, jwtService)
-	vkAuthHandler := handlers.NewVKAuthHandler(authService, jwtService)
+	vkAuthHandler := handlers.NewVKAuthHandler(authService, jwtService, cfg.VKAndroidClientID)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "inBeTwin Auth Service",

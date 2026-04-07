@@ -47,17 +47,18 @@ type VKContextBootstrapRequest struct {
 }
 
 type VKBusinessSnapshot struct {
-	Summary               string   `json:"summary"`
-	TwinStage             string   `json:"twin_stage"`
-	Positioning           string   `json:"positioning,omitempty"`
-	AudienceSummary       string   `json:"audience_summary,omitempty"`
-	OfferSignals          []string `json:"offer_signals"`
-	ContentSignals        []string `json:"content_signals"`
-	KnowledgeSignals      []string `json:"knowledge_signals"`
-	MissingSignals        []string `json:"missing_signals"`
-	RecommendedActions    []string `json:"recommended_actions"`
-	LongPollEnabled       bool     `json:"long_poll_enabled"`
-	ReadyForConversations bool     `json:"ready_for_conversations"`
+	Summary                string   `json:"summary"`
+	TwinStage              string   `json:"twin_stage"`
+	Positioning            string   `json:"positioning,omitempty"`
+	AudienceSummary        string   `json:"audience_summary,omitempty"`
+	OfferSignals           []string `json:"offer_signals"`
+	ContentSignals         []string `json:"content_signals"`
+	KnowledgeSignals       []string `json:"knowledge_signals"`
+	MissingSignals         []string `json:"missing_signals"`
+	RecommendedActions     []string `json:"recommended_actions"`
+	CommunityAccessEnabled bool     `json:"community_access_enabled"`
+	LongPollEnabled        bool     `json:"long_poll_enabled"`
+	ReadyForConversations  bool     `json:"ready_for_conversations"`
 }
 
 type VKContextBootstrapData struct {
@@ -119,26 +120,27 @@ const (
 )
 
 type VKReplyDraft struct {
-	ID               uuid.UUID     `json:"id"`
-	IntegrationID    uuid.UUID     `json:"integration_id"`
-	InboundMessageID uuid.UUID     `json:"inbound_message_id"`
-	FromVKUserID     int64         `json:"from_vk_user_id"`
-	Intent           string        `json:"intent"`
-	Confidence       float64       `json:"confidence"`
-	SafeIntent       bool          `json:"safe_intent"`
-	Status           VKDraftStatus `json:"status"`
-	Source           string        `json:"source"`
-	DraftText        string        `json:"draft_text"`
-	Rationale        string        `json:"rationale"`
-	KnowledgeSnippets []string     `json:"knowledge_snippets"`
-	SentMessageID    *int64        `json:"sent_message_id,omitempty"`
-	ApprovedBy       *uuid.UUID    `json:"approved_by,omitempty"`
-	GeneratedAt      time.Time     `json:"generated_at"`
-	ApprovedAt       *time.Time    `json:"approved_at,omitempty"`
-	SentAt           *time.Time    `json:"sent_at,omitempty"`
+	ID                uuid.UUID     `json:"id"`
+	IntegrationID     uuid.UUID     `json:"integration_id"`
+	InboundMessageID  uuid.UUID     `json:"inbound_message_id"`
+	FromVKUserID      int64         `json:"from_vk_user_id"`
+	PeerID            *int64        `json:"peer_id,omitempty"`
+	Intent            string        `json:"intent"`
+	Confidence        float64       `json:"confidence"`
+	SafeIntent        bool          `json:"safe_intent"`
+	Status            VKDraftStatus `json:"status"`
+	Source            string        `json:"source"`
+	DraftText         string        `json:"draft_text"`
+	Rationale         string        `json:"rationale"`
+	KnowledgeSnippets []string      `json:"knowledge_snippets"`
+	SentMessageID     *int64        `json:"sent_message_id,omitempty"`
+	ApprovedBy        *uuid.UUID    `json:"approved_by,omitempty"`
+	GeneratedAt       time.Time     `json:"generated_at"`
+	ApprovedAt        *time.Time    `json:"approved_at,omitempty"`
+	SentAt            *time.Time    `json:"sent_at,omitempty"`
 
 	// Observability — which path produced this draft and how long it took.
-	OrchestrationSource string     `json:"orchestration_source"`         // legacy | llm_service | fallback_legacy
+	OrchestrationSource string     `json:"orchestration_source"` // legacy | llm_service | fallback_legacy
 	LLMLatencyMs        *int       `json:"llm_latency_ms,omitempty"`
 	FallbackReason      *string    `json:"fallback_reason,omitempty"`
 	PromptTokens        *int       `json:"prompt_tokens,omitempty"`
@@ -179,36 +181,37 @@ type VKApproveDraftRequest struct {
 }
 
 type VKWorkspacePost struct {
-	ID            uuid.UUID  `json:"id"`
-	VKPostID      int64      `json:"vk_post_id"`
-	Text          string     `json:"text,omitempty"`
-	HasMedia      bool       `json:"has_media"`
-	MediaType     string     `json:"media_type,omitempty"`
-	LikesCount    int        `json:"likes_count"`
-	CommentsCount int        `json:"comments_count"`
-	PostedAt      time.Time  `json:"posted_at"`
+	ID            uuid.UUID `json:"id"`
+	VKPostID      int64     `json:"vk_post_id"`
+	Text          string    `json:"text,omitempty"`
+	HasMedia      bool      `json:"has_media"`
+	MediaType     string    `json:"media_type,omitempty"`
+	LikesCount    int       `json:"likes_count"`
+	CommentsCount int       `json:"comments_count"`
+	PostedAt      time.Time `json:"posted_at"`
 }
 
 type VKWorkspaceMessage struct {
-	ID             uuid.UUID      `json:"id"`
-	FromVKUserID   int64          `json:"from_vk_user_id"`
-	Text           string         `json:"text,omitempty"`
-	IsIncoming     bool           `json:"is_incoming"`
-	IsProcessed    bool           `json:"is_processed"`
-	ReceivedAt     time.Time      `json:"received_at"`
-	Draft          *VKReplyDraft  `json:"draft,omitempty"`
+	ID           uuid.UUID     `json:"id"`
+	FromVKUserID int64         `json:"from_vk_user_id"`
+	PeerID       *int64        `json:"peer_id,omitempty"`
+	Text         string        `json:"text,omitempty"`
+	IsIncoming   bool          `json:"is_incoming"`
+	IsProcessed  bool          `json:"is_processed"`
+	ReceivedAt   time.Time     `json:"received_at"`
+	Draft        *VKReplyDraft `json:"draft,omitempty"`
 }
 
 type VKWorkspaceLead struct {
-	ID             uuid.UUID `json:"id"`
-	VKUserID       int64     `json:"vk_user_id"`
-	FirstName      string    `json:"first_name"`
-	LastName       string    `json:"last_name"`
-	City           string    `json:"city,omitempty"`
-	Country        string    `json:"country,omitempty"`
-	About          string    `json:"about,omitempty"`
-	Status         string    `json:"status,omitempty"`
-	FollowersCount int       `json:"followers_count"`
+	ID             uuid.UUID  `json:"id"`
+	VKUserID       int64      `json:"vk_user_id"`
+	FirstName      string     `json:"first_name"`
+	LastName       string     `json:"last_name"`
+	City           string     `json:"city,omitempty"`
+	Country        string     `json:"country,omitempty"`
+	About          string     `json:"about,omitempty"`
+	Status         string     `json:"status,omitempty"`
+	FollowersCount int        `json:"followers_count"`
 	LastEnrichedAt *time.Time `json:"last_enriched_at,omitempty"`
 }
 
@@ -219,24 +222,24 @@ type VKIntentConfidence struct {
 }
 
 type VKWorkspaceAnalytics struct {
-	IncomingMessages          int                  `json:"incoming_messages"`
-	OutgoingMessages          int                  `json:"outgoing_messages"`
-	PendingDrafts             int                  `json:"pending_drafts"`
-	Leads                     int                  `json:"leads"`
-	FirstResponseTimeMinutes  float64              `json:"first_response_time_minutes"`
-	HandoffRate               float64              `json:"handoff_rate"`
-	LeadConversionRate        float64              `json:"lead_conversion_rate"`
-	ConfidenceByIntent        []VKIntentConfidence `json:"confidence_by_intent"`
+	IncomingMessages         int                  `json:"incoming_messages"`
+	OutgoingMessages         int                  `json:"outgoing_messages"`
+	PendingDrafts            int                  `json:"pending_drafts"`
+	Leads                    int                  `json:"leads"`
+	FirstResponseTimeMinutes float64              `json:"first_response_time_minutes"`
+	HandoffRate              float64              `json:"handoff_rate"`
+	LeadConversionRate       float64              `json:"lead_conversion_rate"`
+	ConfidenceByIntent       []VKIntentConfidence `json:"confidence_by_intent"`
 }
 
 type VKWorkspaceData struct {
-	Integration      *VKIntegration         `json:"integration"`
-	BusinessSnapshot *VKBusinessSnapshot    `json:"business_snapshot,omitempty"`
-	RecentPosts      []VKWorkspacePost      `json:"recent_posts"`
-	RecentMessages   []VKWorkspaceMessage   `json:"recent_messages"`
-	Leads            []VKWorkspaceLead      `json:"leads"`
-	Drafts           []VKReplyDraft         `json:"drafts"`
-	Recommendations  []string               `json:"recommendations"`
-	Analytics        VKWorkspaceAnalytics   `json:"analytics"`
-	AgentSettings    *VKAgentSettings       `json:"agent_settings,omitempty"`
+	Integration      *VKIntegration       `json:"integration"`
+	BusinessSnapshot *VKBusinessSnapshot  `json:"business_snapshot,omitempty"`
+	RecentPosts      []VKWorkspacePost    `json:"recent_posts"`
+	RecentMessages   []VKWorkspaceMessage `json:"recent_messages"`
+	Leads            []VKWorkspaceLead    `json:"leads"`
+	Drafts           []VKReplyDraft       `json:"drafts"`
+	Recommendations  []string             `json:"recommendations"`
+	Analytics        VKWorkspaceAnalytics `json:"analytics"`
+	AgentSettings    *VKAgentSettings     `json:"agent_settings,omitempty"`
 }
