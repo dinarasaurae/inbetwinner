@@ -101,6 +101,8 @@ services:
       YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
       YANDEX_REDIRECT_URL: ${YANDEX_REDIRECT_URL:-http://localhost:3001/api/v1/auth/oauth/yandex/callback}
 
+      VK_APP_ID_ANDROID: ${VK_APP_ID_ANDROID:-54511649}
+
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
 
     ports:

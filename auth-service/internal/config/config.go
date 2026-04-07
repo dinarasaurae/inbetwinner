@@ -31,6 +31,8 @@ type Config struct {
 	YandexClientSecret string
 	YandexRedirectURL  string
 
+	VKAndroidClientID string
+
 	FrontendURL string
 }
 
@@ -75,6 +77,8 @@ func Load() *Config {
 		YandexClientID:     getEnv("YANDEX_CLIENT_ID", ""),
 		YandexClientSecret: getEnv("YANDEX_CLIENT_SECRET", ""),
 		YandexRedirectURL:  getEnv("YANDEX_REDIRECT_URL", "http://localhost:3001/api/v1/auth/oauth/yandex/callback"),
+
+		VKAndroidClientID: getEnv("VK_APP_ID_ANDROID", "54511649"),
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 	}

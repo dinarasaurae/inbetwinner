@@ -70,6 +70,8 @@ func (c *Client) call(ctx context.Context, method string, params url.Values) (js
 		Error *APIError `json:"error"`
 	}
 	if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
+		// Log full debug info (request_params) for errors so we can diagnose issues.
+		fmt.Printf("[vk-api] error calling %s: %s\n", method, envelope.Error.DebugString())
 		return nil, envelope.Error
 	}
 
@@ -169,8 +171,8 @@ func (c *Client) GroupsGetByID(ctx context.Context, groupID int64) (*Group, erro
 	if err != nil {
 		return nil, err
 	}
-	var groups []Group
-	if err := json.Unmarshal(raw, &groups); err != nil || len(groups) == 0 {
+	groups, err := parseGroupsGetByIDResponse(raw)
+	if err != nil || len(groups) == 0 {
 		return nil, fmt.Errorf("vk: group not found or parse error")
 	}
 	return &groups[0], nil
@@ -187,11 +189,27 @@ func (c *Client) GroupsGetByRef(ctx context.Context, groupRef string) (*Group, e
 	if err != nil {
 		return nil, err
 	}
-	var groups []Group
-	if err := json.Unmarshal(raw, &groups); err != nil || len(groups) == 0 {
+	groups, err := parseGroupsGetByIDResponse(raw)
+	if err != nil || len(groups) == 0 {
 		return nil, fmt.Errorf("vk: group not found or parse error")
 	}
 	return &groups[0], nil
+}
+
+func parseGroupsGetByIDResponse(raw json.RawMessage) ([]Group, error) {
+	var groups []Group
+	if err := json.Unmarshal(raw, &groups); err == nil && len(groups) > 0 {
+		return groups, nil
+	}
+
+	var wrapped struct {
+		Groups []Group `json:"groups"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Groups) > 0 {
+		return wrapped.Groups, nil
+	}
+
+	return nil, fmt.Errorf("vk: unsupported groups.getById response format")
 }
 
 // ─── Wall ─────────────────────────────────────────────────────────────────────
@@ -214,12 +232,14 @@ func (c *Client) WallGet(ctx context.Context, ownerID int64, count, offset int) 
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
-// MessagesSend sends a message to a VK user from the group.
-func (c *Client) MessagesSend(ctx context.Context, toUserID int64, text string) (int64, error) {
+// MessagesSend sends a message into a VK dialog (peer) from the community.
+// For 1:1 conversations peer_id is equal to the other user's id.
+// Uses a community (group) access token; no group_id param needed since the
+// token already identifies the community context.
+func (c *Client) MessagesSend(ctx context.Context, peerID int64, text string) (int64, error) {
 	p := url.Values{
-		"user_id":   {strconv.FormatInt(toUserID, 10)},
+		"peer_id":   {strconv.FormatInt(peerID, 10)},
 		"message":   {text},
-		"group_id":  {strconv.FormatInt(c.groupID, 10)},
 		"random_id": {strconv.FormatInt(time.Now().UnixNano(), 10)},
 	}
 	raw, err := c.call(ctx, "messages.send", p)
@@ -228,6 +248,21 @@ func (c *Client) MessagesSend(ctx context.Context, toUserID int64, text string) 
 	}
 	var msgID int64
 	return msgID, json.Unmarshal(raw, &msgID)
+}
+
+// GroupsGetSettings fetches community settings including whether messaging is enabled.
+// Requires a community token with manage scope.
+// Returns messaging: 0=disabled 1=enabled.
+func (c *Client) GroupsGetSettings(ctx context.Context, groupID int64) (map[string]interface{}, error) {
+	p := url.Values{
+		"group_id": {strconv.FormatInt(groupID, 10)},
+	}
+	raw, err := c.call(ctx, "groups.getSettings", p)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	return result, json.Unmarshal(raw, &result)
 }
 
 // ─── Long Poll setup ──────────────────────────────────────────────────────────

@@ -27,9 +27,6 @@ func (h *VKHandler) UserLegacyOAuthStart(c fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
 	}
 	platform := normalisePlatform(c.Query("platform"))
-	if platform == "android" || platform == "ios" {
-		platform = "web"
-	}
 	authURL, state, implicit, err := h.svc.UserOAuthStart(c.Context(), userID, platform)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))

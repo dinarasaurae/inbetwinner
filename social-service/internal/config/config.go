@@ -52,6 +52,10 @@ type Config struct {
 	VKWebRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/user/callback
 	// Separate public HTTPS callback for community OAuth via oauth.vk.com.
 	VKGroupRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/callback
+	// Community OAuth scopes requested when issuing a group token.
+	// Keep this aligned with the rights actually needed for outbound messaging
+	// and rich attachments from the community.
+	VKCommunityScopes string
 
 	// Android app (ID 54511649)
 	VKAndroidAppID      string
@@ -64,6 +68,11 @@ type Config struct {
 	VKIOSAppSecret string
 	// VK ID SDK redirect: vk{clientId}://vk.ru — registered via CFBundleURLSchemes in Info.plist
 	VKIOSRedirectURI string
+
+	// Legacy browser OAuth redirect used by the old mobile VK connect flow.
+	// This stays separate from VK ID SDK redirects so we can preserve the
+	// historically working auto-token path without disturbing app login.
+	VKLegacyMobileRedirectURI string
 
 	// Frontend URL — browser is redirected here after web OAuth completes
 	FrontendURL string
@@ -120,6 +129,41 @@ func (c *Config) VKCommunityPlatform() VKPlatformConfig {
 	}
 }
 
+// VKLegacyBrowserUserPlatform returns the browser-based OAuth config used by
+// the old VK connect wizard step 1. Even on mobile we route this through the
+// web app because current VK console settings expose trusted redirect URLs only
+// for the web app, while Android/iOS app configs are limited to package/bundle
+// identity for VK ID SDK redirects.
+func (c *Config) VKLegacyBrowserUserPlatform() VKPlatformConfig {
+	return VKPlatformConfig{
+		AppID:       c.VKWebAppID,
+		AppSecret:   c.VKWebAppSecret,
+		RedirectURI: c.VKWebRedirectURI,
+	}
+}
+
+// VKLegacyMobilePlatform returns the old mobile browser OAuth config used by
+// the pre-workspace VK connect wizard. It keeps the platform-specific app IDs
+// but routes the callback back through the app deep link instead of VK ID SDK.
+func (c *Config) VKLegacyMobilePlatform(platform string) VKPlatformConfig {
+	switch platform {
+	case "android":
+		return VKPlatformConfig{
+			AppID:       c.VKAndroidAppID,
+			AppSecret:   c.VKAndroidAppSecret,
+			RedirectURI: c.VKLegacyMobileRedirectURI,
+		}
+	case "ios":
+		return VKPlatformConfig{
+			AppID:       c.VKIOSAppID,
+			AppSecret:   c.VKIOSAppSecret,
+			RedirectURI: c.VKLegacyMobileRedirectURI,
+		}
+	default:
+		return c.VKPlatform(platform)
+	}
+}
+
 func Load() *Config {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using environment variables")
@@ -156,6 +200,7 @@ func Load() *Config {
 		VKWebAppSecret:   getEnv("VK_APP_SECRET_WEB", ""),
 		VKWebRedirectURI: getEnv("VK_REDIRECT_URI_WEB", "http://localhost:3002/api/v1/social/vk/oauth/user/callback"),
 		VKGroupRedirectURI: getEnv("VK_REDIRECT_URI_GROUP", "http://localhost:3002/api/v1/social/vk/oauth/callback"),
+		VKCommunityScopes: getEnv("VK_COMMUNITY_SCOPES", "messages,manage,photos,docs,stories,wall,market"),
 
 		VKAndroidAppID:       getEnv("VK_APP_ID_ANDROID", "54511649"),
 		VKAndroidAppSecret:   getEnv("VK_APP_SECRET_ANDROID", ""),
@@ -166,6 +211,7 @@ func Load() *Config {
 		VKIOSAppSecret: getEnv("VK_APP_SECRET_IOS", ""),
 		// VK ID OAuth 2.1 redirect — vk{clientId}://vk.ru/blank.html
 		VKIOSRedirectURI: getEnv("VK_REDIRECT_URI_IOS", "vk54511650://vk.ru/blank.html"),
+		VKLegacyMobileRedirectURI: getEnv("VK_REDIRECT_URI_MOBILE", "inbetwin://vk-callback"),
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 

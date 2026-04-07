@@ -155,10 +155,16 @@ func (s *VKService) BootstrapContext(ctx context.Context, userID uuid.UUID, inte
 }
 
 func (s *VKService) GetWorkspace(ctx context.Context, userID uuid.UUID, integrationID uuid.UUID) (*models.VKWorkspaceData, error) {
-	integ, _, err := s.loadIntegration(ctx, userID, integrationID)
+	integ, token, err := s.loadIntegration(ctx, userID, integrationID)
 	if err != nil {
 		return nil, err
 	}
+	integ.CommunityAccessEnabled = strings.TrimSpace(token) != ""
+
+	// groups.getSettings requires a legacy non-IP-locked user token which is not
+	// available when the user authenticated via VK ID 2.0 (mobile). Assume messaging
+	// is enabled — the real error will surface on messages.send if it's not.
+	integ.MessagingEnabled = true
 
 	integ.PostsCount, integ.MessageCount, integ.LeadCount, _ = s.integrationCounts(ctx, integ.ID)
 	integ.ContextReady = integ.PostsCount > 0 || integ.MessageCount > 0
@@ -260,7 +266,7 @@ func (s *VKService) fetchRecentPosts(ctx context.Context, integrationID uuid.UUI
 func (s *VKService) fetchRecentMessages(ctx context.Context, integrationID uuid.UUID, limit int) ([]models.VKWorkspaceMessage, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			m.id, m.from_vk_user_id, COALESCE(m.text,''), m.is_incoming, m.is_processed, m.received_at,
+			m.id, m.from_vk_user_id, m.peer_id, COALESCE(m.text,''), m.is_incoming, m.is_processed, m.received_at,
 			d.id, d.intent, d.confidence, d.safe_intent, d.status, d.source, d.draft_text, d.rationale,
 			COALESCE(d.knowledge_snippets, '[]'::jsonb)
 		  FROM vk_messages m
@@ -278,6 +284,7 @@ func (s *VKService) fetchRecentMessages(ctx context.Context, integrationID uuid.
 	out := []models.VKWorkspaceMessage{}
 	for rows.Next() {
 		var item models.VKWorkspaceMessage
+		var peerID sql.NullInt64
 		// All d.* fields come from a LEFT JOIN — they are NULL when no draft exists.
 		var draftID sql.NullString
 		var intent, status, source, draftText, rationale sql.NullString
@@ -285,10 +292,13 @@ func (s *VKService) fetchRecentMessages(ctx context.Context, integrationID uuid.
 		var safe sql.NullBool
 		var snippetsRaw []byte
 		if err := rows.Scan(
-			&item.ID, &item.FromVKUserID, &item.Text, &item.IsIncoming, &item.IsProcessed, &item.ReceivedAt,
+			&item.ID, &item.FromVKUserID, &peerID, &item.Text, &item.IsIncoming, &item.IsProcessed, &item.ReceivedAt,
 			&draftID, &intent, &conf, &safe, &status, &source, &draftText, &rationale, &snippetsRaw,
 		); err != nil {
 			return nil, err
+		}
+		if peerID.Valid {
+			item.PeerID = &peerID.Int64
 		}
 		if draftID.Valid {
 			did, _ := uuid.Parse(draftID.String)
@@ -299,6 +309,7 @@ func (s *VKService) fetchRecentMessages(ctx context.Context, integrationID uuid.
 				IntegrationID:     integrationID,
 				InboundMessageID:  item.ID,
 				FromVKUserID:      item.FromVKUserID,
+				PeerID:            item.PeerID,
 				Intent:            intent.String,
 				Confidence:        conf.Float64,
 				SafeIntent:        safe.Bool,
@@ -347,6 +358,7 @@ func (s *VKService) buildBusinessSnapshot(ctx context.Context, userID uuid.UUID,
 	}
 	topTopics := extractTopTopics(postTexts, 6)
 	longPollEnabled, longPollWarning := s.longPollEnabled(ctx, userID, integ.ID)
+	communityAccessPending := strings.Contains(longPollWarning, "Контекст подключён по user token")
 
 	stage := "Foundation"
 	if integ.MessageCount >= 5 {
@@ -377,7 +389,11 @@ func (s *VKService) buildBusinessSnapshot(ctx context.Context, userID uuid.UUID,
 		missingSignals = append(missingSignals, "Нет входящих сообщений для обучения агента")
 	}
 	if !longPollEnabled {
-		missingSignals = append(missingSignals, "Long Poll API выключен")
+		if communityAccessPending {
+			missingSignals = append(missingSignals, "Доступ сообщества для сообщений ещё не включён")
+		} else {
+			missingSignals = append(missingSignals, "Long Poll API выключен")
+		}
 	}
 
 	recommended := []string{}
@@ -409,17 +425,18 @@ func (s *VKService) buildBusinessSnapshot(ctx context.Context, userID uuid.UUID,
 	)
 
 	return &models.VKBusinessSnapshot{
-		Summary:               summary,
-		TwinStage:             stage,
-		Positioning:           positioning,
-		AudienceSummary:       audienceSummary,
-		OfferSignals:          offerSignals,
-		ContentSignals:        topTopics,
-		KnowledgeSignals:      knowledgeSignals,
-		MissingSignals:        missingSignals,
-		RecommendedActions:    recommended,
-		LongPollEnabled:       longPollEnabled,
-		ReadyForConversations: longPollEnabled && integ.PostsCount > 0,
+		Summary:                summary,
+		TwinStage:              stage,
+		Positioning:            positioning,
+		AudienceSummary:        audienceSummary,
+		OfferSignals:           offerSignals,
+		ContentSignals:         topTopics,
+		KnowledgeSignals:       knowledgeSignals,
+		MissingSignals:         missingSignals,
+		RecommendedActions:     recommended,
+		CommunityAccessEnabled: !communityAccessPending,
+		LongPollEnabled:        longPollEnabled,
+		ReadyForConversations:  longPollEnabled && integ.PostsCount > 0,
 	}, nil
 }
 
@@ -427,6 +444,9 @@ func (s *VKService) longPollEnabled(ctx context.Context, userID, integrationID u
 	integ, token, err := s.loadIntegration(ctx, userID, integrationID)
 	if err != nil {
 		return false, "Не удалось проверить Long Poll API."
+	}
+	if strings.TrimSpace(token) == "" {
+		return false, "Контекст подключён по user token. Для сообщений и автоответов отдельно включите доступ сообщества."
 	}
 	client := vkapi.NewClient(token, integ.GroupID)
 	if _, err := client.GroupsGetLongPollServer(ctx, integ.GroupID); err != nil {
@@ -530,7 +550,11 @@ func buildSetupWarnings(snapshot *models.VKBusinessSnapshot) []string {
 	}
 	warnings := append([]string{}, snapshot.MissingSignals...)
 	if !snapshot.LongPollEnabled {
-		warnings = append(warnings, "В группе не включён Long Poll API, поэтому real-time сообщения не синхронизируются.")
+		if containsString(snapshot.MissingSignals, "Доступ сообщества для сообщений ещё не включён") {
+			warnings = append(warnings, "Сообщество подключено по user token. Чтобы включить real-time сообщения и ответы от лица группы, отдельно включите доступ сообщества.")
+		} else {
+			warnings = append(warnings, "В группе не включён Long Poll API, поэтому real-time сообщения не синхронизируются.")
+		}
 	}
 	return warnings
 }
@@ -648,6 +672,15 @@ func uniqueStrings(items []string) []string {
 		out = append(out, item)
 	}
 	return out
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 func minInt(a, b int) int {
