@@ -136,6 +136,12 @@ func main() {
 		return proxyService.ProxyRequest(c, cfg.SocialServiceURL)
 	})
 
+	// Google OAuth callback — Google redirects the browser here after consent.
+	// No JWT: user is identified via the state nonce stored in the rag-service.
+	api.Get("/rag/google/oauth/callback", func(c fiber.Ctx) error {
+		return proxyService.ProxyRequest(c, cfg.RAGServiceURL)
+	})
+
 	protected := api.Group("", jwtlib.AuthMiddleware(jwtService))
 
 	social := protected.Group("/social")

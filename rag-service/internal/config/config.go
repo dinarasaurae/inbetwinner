@@ -29,6 +29,8 @@ type Config struct {
 
 	GoogleClientID     string
 	GoogleClientSecret string
+	GoogleRedirectURI  string
+	PublicBaseURL      string
 
 	// MinIO / S3-compatible object storage (optional).
 	// When MinioEndpoint is empty the storage layer is disabled and original
@@ -71,6 +73,8 @@ func Load() *Config {
 
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURI:  getEnv("GOOGLE_REDIRECT_URI", ""),
+		PublicBaseURL:      getEnv("PUBLIC_BASE_URL", ""),
 
 		MinioEndpoint:  getEnv("MINIO_ENDPOINT", ""),
 		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),

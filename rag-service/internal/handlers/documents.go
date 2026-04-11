@@ -90,10 +90,13 @@ func (h *DocumentHandler) Upload(c fiber.Ctx) error {
 
 func (h *DocumentHandler) List(c fiber.Ctx) error {
 	wid := c.Locals("workspaceID").(uuid.UUID)
-	nsIDStr := c.Query("namespace_id")
-	nsID, err := uuid.Parse(nsIDStr)
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "invalid namespace_id"})
+	var nsID *uuid.UUID
+	if nsIDStr := c.Query("namespace_id"); nsIDStr != "" {
+		id, err := uuid.Parse(nsIDStr)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid namespace_id"})
+		}
+		nsID = &id
 	}
 	docs, err := h.svc.List(c.Context(), wid, nsID)
 	if err != nil {
@@ -102,7 +105,7 @@ func (h *DocumentHandler) List(c fiber.Ctx) error {
 	if docs == nil {
 		docs = []models.KnowledgeDocument{}
 	}
-	return c.JSON(docs)
+	return c.JSON(fiber.Map{"items": docs, "total": len(docs)})
 }
 
 func (h *DocumentHandler) Delete(c fiber.Ctx) error {

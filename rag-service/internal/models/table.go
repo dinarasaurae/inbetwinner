@@ -23,6 +23,7 @@ type SheetsSyncRequest struct {
 	SpreadsheetID string    `json:"spreadsheet_id"`
 	SheetName     string    `json:"sheet_name"`
 	NamespaceID   uuid.UUID `json:"namespace_id"`
-	APIKey        string    `json:"api_key"`
+	APIKey        string    `json:"api_key,omitempty"`   // legacy: plain API key
+	UseOAuth      bool      `json:"use_oauth,omitempty"` // use stored Google OAuth token
 	TableName     string    `json:"table_name"`
 }

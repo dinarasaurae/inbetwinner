@@ -486,6 +486,42 @@ func (h *VKHandler) SaveCommunityTokenByInteg(c fiber.Ctx) error {
 	return c.JSON(jwtlib.NewSuccessResponse("community token saved", integ))
 }
 
+// CommunityAccessStart handles GET /social/vk/community-access/start?integration_id=xxx&platform=xxx
+// Mobile-friendly alias: looks up group_id from integration_id, then starts the VK community OAuth flow.
+func (h *VKHandler) CommunityAccessStart(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	integIDStr := c.Query("integration_id")
+	integID, err := uuid.Parse(integIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			jwtlib.NewErrorResponse("invalid_request", "integration_id is required and must be a valid UUID"))
+	}
+
+	platform := normalisePlatform(c.Query("platform"))
+
+	groupID, err := h.svc.GetGroupIDByIntegration(c.Context(), userID, integID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(jwtlib.NewErrorResponse("not_found", err.Error()))
+	}
+
+	authURL, state, err := h.svc.OAuthStart(c.Context(), userID, groupID, platform)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(
+			jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("", models.OAuthStartResponse{
+		AuthURL:  authURL,
+		State:    state,
+		Platform: platform,
+		GroupID:  groupID,
+	}))
+}
+
 // SaveCommunityToken handles POST /social/vk/groups/:group_id/token
 // Allows saving a manually created community token (from VK community management panel).
 func (h *VKHandler) SaveCommunityToken(c fiber.Ctx) error {

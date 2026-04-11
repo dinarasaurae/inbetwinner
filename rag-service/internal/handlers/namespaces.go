@@ -35,7 +35,7 @@ func (h *NamespaceHandler) List(c fiber.Ctx) error {
 	if list == nil {
 		list = []models.Namespace{}
 	}
-	return c.JSON(list)
+	return c.JSON(fiber.Map{"items": list, "total": len(list)})
 }
 
 func (h *NamespaceHandler) Delete(c fiber.Ctx) error {
