@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -106,13 +107,9 @@ func (s *DocumentService) createWithID(
 		texts[i] = c
 	}
 
-	embeddings, err := s.embedding.EmbedBatch(ctx, texts)
-	if err != nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE knowledge_documents SET status='failed' WHERE id=$1`, docID)
-		return nil, fmt.Errorf("embed: %w", err)
-	}
+	embeddings, embedErr := s.embedding.EmbedBatch(ctx, texts)
 
-	var vectors []VectorRecord
+	// Save chunks to postgres for BM25 search regardless of embedding result
 	for i, chunk := range chunks {
 		pid := fmt.Sprintf("%s_%d", docID.String(), i)
 		tokenCount := len(strings.Fields(chunk))
@@ -123,27 +120,34 @@ func (s *DocumentService) createWithID(
 		); err != nil {
 			return nil, fmt.Errorf("insert chunk: %w", err)
 		}
-		vectors = append(vectors, VectorRecord{
-			ID:     pid,
-			Values: embeddings[i],
-			Metadata: map[string]interface{}{
-				"workspace_id": workspaceID.String(),
-				"document_id":  docID.String(),
-				"chunk_index":  float64(i),
-				"text":         chunk,
-				"source":       "doc",
-				"filename":     filename,
-			},
-		})
 	}
 
-	if s.pinecone != nil {
-		if err := s.pinecone.UpsertVectors(ctx, ns.PineconeNS, vectors); err != nil {
-			return nil, fmt.Errorf("pinecone upsert: %w", err)
+	// Upsert to Pinecone only if embedding succeeded
+	if embedErr == nil && s.pinecone != nil {
+		var vectors []VectorRecord
+		for i, chunk := range chunks {
+			pid := fmt.Sprintf("%s_%d", docID.String(), i)
+			vectors = append(vectors, VectorRecord{
+				ID:     pid,
+				Values: embeddings[i],
+				Metadata: map[string]interface{}{
+					"workspace_id": workspaceID.String(),
+					"document_id":  docID.String(),
+					"chunk_index":  float64(i),
+					"text":         chunk,
+					"source":       "doc",
+					"filename":     filename,
+				},
+			})
 		}
+		_ = s.pinecone.UpsertVectors(ctx, ns.PineconeNS, vectors) // best-effort
 	}
 
-	_, _ = s.db.ExecContext(ctx, `UPDATE knowledge_documents SET status='indexed', chunk_count=$1 WHERE id=$2`, len(chunks), docID)
+	status := "indexed"
+	if embedErr != nil {
+		status = "pending" // saved, but not yet vectorized
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE knowledge_documents SET status=$1, chunk_count=$2 WHERE id=$3`, status, len(chunks), docID)
 	return s.GetByID(ctx, docID, workspaceID)
 }
 
@@ -166,13 +170,24 @@ func (s *DocumentService) GetByID(ctx context.Context, id, workspaceID uuid.UUID
 	return doc, err
 }
 
-func (s *DocumentService) List(ctx context.Context, workspaceID, namespaceID uuid.UUID) ([]models.KnowledgeDocument, error) {
-	rows, err := s.db.QueryContext(ctx, `
-        SELECT id, workspace_id, namespace_id, filename, content_type,
-               chunk_size, chunk_count, status, embed_model,
-               minio_key, file_size, created_at, updated_at
-        FROM knowledge_documents WHERE workspace_id=$1 AND namespace_id=$2 ORDER BY created_at DESC`,
-		workspaceID, namespaceID)
+func (s *DocumentService) List(ctx context.Context, workspaceID uuid.UUID, namespaceID *uuid.UUID) ([]models.KnowledgeDocument, error) {
+	var rows *sql.Rows
+	var err error
+	if namespaceID != nil {
+		rows, err = s.db.QueryContext(ctx, `
+            SELECT id, workspace_id, namespace_id, filename, content_type,
+                   chunk_size, chunk_count, status, embed_model,
+                   minio_key, file_size, created_at, updated_at
+            FROM knowledge_documents WHERE workspace_id=$1 AND namespace_id=$2 ORDER BY created_at DESC`,
+			workspaceID, *namespaceID)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+            SELECT id, workspace_id, namespace_id, filename, content_type,
+                   chunk_size, chunk_count, status, embed_model,
+                   minio_key, file_size, created_at, updated_at
+            FROM knowledge_documents WHERE workspace_id=$1 ORDER BY created_at DESC`,
+			workspaceID)
+	}
 	if err != nil {
 		return nil, err
 	}

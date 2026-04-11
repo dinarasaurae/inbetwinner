@@ -43,7 +43,7 @@ func main() {
 		}
 	}
 
-	// MinIO / S3 storage — optional; nil when endpoint is not configured
+	// MinIO / S3 storage — optional
 	ctx := context.Background()
 	storageSvc, err := services.NewStorageService(
 		cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey,
@@ -61,23 +61,36 @@ func main() {
 		}
 	}
 
+	// Google OAuth (optional — requires GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET)
+	googleRedirectURI := cfg.GoogleRedirectURI
+	if googleRedirectURI == "" {
+		googleRedirectURI = cfg.PublicBaseURL + "/rag/google/oauth/callback"
+	}
+	googleOAuthSvc := services.NewGoogleOAuthService(db, cfg.GoogleClientID, cfg.GoogleClientSecret, googleRedirectURI)
+	if googleOAuthSvc.IsConfigured() {
+		log.Printf("Google OAuth configured (redirect: %s)", googleRedirectURI)
+	}
+
 	nsSvc := services.NewNamespaceService(db, pcSvc)
 	docSvc := services.NewDocumentService(db, embSvc, pcSvc, nsSvc, storageSvc, cfg.OpenAIEmbeddingModel)
 	qaSvc := services.NewQAService(db, embSvc, pcSvc, nsSvc)
 	searchSvc := services.NewSearchService(db, embSvc, pcSvc, nsSvc)
-	sheetsSvc := services.NewSheetsService(db, embSvc, pcSvc, nsSvc)
+	sheetsSvc := services.NewSheetsService(db, embSvc, pcSvc, nsSvc, googleOAuthSvc)
+	webSvc := services.NewWebService(db, embSvc, pcSvc, nsSvc)
 
 	nsH := handlers.NewNamespaceHandler(nsSvc)
 	docH := handlers.NewDocumentHandler(docSvc)
 	qaH := handlers.NewQAHandler(qaSvc)
 	searchH := handlers.NewSearchHandler(searchSvc)
 	sheetsH := handlers.NewSheetsHandler(sheetsSvc)
+	webH := handlers.NewWebHandler(webSvc)
+	googleOAuthH := handlers.NewGoogleOAuthHandler(googleOAuthSvc, googleRedirectURI)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "inBeTwin RAG Service",
-		ReadTimeout:  60 * time.Second, // longer for file uploads
+		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 30 * time.Second,
-		BodyLimit:    52 << 20, // 52 MB — accommodates 50 MB file + overhead
+		BodyLimit:    52 << 20,
 	})
 	app.Use(recover.New())
 	app.Use(logger.New(logger.Config{
@@ -88,25 +101,44 @@ func main() {
 
 	app.Get("/health", handlers.HealthCheck)
 
+	// Google OAuth callback — NOT behind workspace auth (browser redirect)
+	app.Get("/rag/google/oauth/callback", googleOAuthH.Callback)
+
 	rag := app.Group("/rag", middleware.WorkspaceAuth())
 
+	// ── Namespaces ────────────────────────────────────────────────────────────
 	rag.Post("/namespaces", nsH.Create)
 	rag.Get("/namespaces", nsH.List)
 	rag.Delete("/namespaces/:id", nsH.Delete)
 
-	// Text-based ingestion (JSON body with "content" field)
+	// ── Documents (text ingestion + file upload) ──────────────────────────────
 	rag.Post("/documents", docH.Create)
-	// File upload (multipart/form-data: file + namespace_id + chunk_size)
 	rag.Post("/documents/upload", docH.Upload)
 	rag.Get("/documents", docH.List)
 	rag.Delete("/documents/:id", docH.Delete)
 
+	// ── QA pairs ─────────────────────────────────────────────────────────────
 	rag.Post("/qa", qaH.Create)
 	rag.Get("/qa", qaH.List)
 	rag.Delete("/qa/:id", qaH.Delete)
 
-	rag.Post("/search", searchH.Search)
+	// ── Google Sheets ─────────────────────────────────────────────────────────
 	rag.Post("/sheets/sync", sheetsH.Sync)
+	rag.Get("/sheets", sheetsH.List)
+	rag.Delete("/sheets/:id", sheetsH.Delete)
+
+	// ── Web / URL sources ─────────────────────────────────────────────────────
+	rag.Post("/web", webH.Add)
+	rag.Get("/web", webH.List)
+	rag.Delete("/web/:id", webH.Delete)
+
+	// ── Google OAuth (requires workspace auth for start/status/disconnect) ────
+	rag.Get("/google/oauth/start", googleOAuthH.Start)
+	rag.Get("/google/oauth/status", googleOAuthH.Status)
+	rag.Delete("/google/oauth", googleOAuthH.Disconnect)
+
+	// ── Semantic search ───────────────────────────────────────────────────────
+	rag.Post("/search", searchH.Search)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

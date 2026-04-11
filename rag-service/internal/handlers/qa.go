@@ -26,9 +26,13 @@ func (h *QAHandler) Create(c fiber.Ctx) error {
 
 func (h *QAHandler) List(c fiber.Ctx) error {
 	wid := c.Locals("workspaceID").(uuid.UUID)
-	nsID, err := uuid.Parse(c.Query("namespace_id"))
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "invalid namespace_id"})
+	var nsID *uuid.UUID
+	if nsIDStr := c.Query("namespace_id"); nsIDStr != "" {
+		id, err := uuid.Parse(nsIDStr)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid namespace_id"})
+		}
+		nsID = &id
 	}
 	list, err := h.svc.List(c.Context(), wid, nsID)
 	if err != nil {
@@ -37,7 +41,7 @@ func (h *QAHandler) List(c fiber.Ctx) error {
 	if list == nil {
 		list = []models.QAPair{}
 	}
-	return c.JSON(list)
+	return c.JSON(fiber.Map{"items": list, "total": len(list)})
 }
 
 func (h *QAHandler) Delete(c fiber.Ctx) error {

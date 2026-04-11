@@ -157,6 +157,7 @@ func main() {
 	// Connected groups management
 	vk.Get("/groups", vkHandler.ListIntegrations)
 	vk.Post("/groups/:group_id/token", vkHandler.SaveCommunityToken)       // manual token via group_id
+	vk.Get("/community-access/start", vkHandler.CommunityAccessStart)        // OAuth start via integration_id (mobile)
 	vk.Post("/community-access/token", vkHandler.SaveCommunityTokenByInteg) // manual token via integration_id (mobile)
 	vk.Delete("/disconnect", vkHandler.Disconnect)
 	vk.Post("/sync", vkHandler.SyncPosts)

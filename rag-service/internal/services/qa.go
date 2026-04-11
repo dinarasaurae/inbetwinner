@@ -28,10 +28,9 @@ func (s *QAService) Create(ctx context.Context, workspaceID uuid.UUID, req model
 		return nil, fmt.Errorf("namespace: %w", err)
 	}
 	tagsJSON, _ := json.Marshal(req.Tags)
-	vec, err := s.embedding.EmbedText(ctx, req.Question)
-	if err != nil {
-		return nil, fmt.Errorf("embed: %w", err)
-	}
+	// Attempt embedding — non-fatal, record is still saved for BM25 search
+	vec, embedErr := s.embedding.EmbedText(ctx, req.Question)
+
 	qa := &models.QAPair{}
 	err = s.db.QueryRowContext(ctx, `
         INSERT INTO qa_pairs (workspace_id, namespace_id, question, answer, tags, is_strict)
@@ -46,7 +45,9 @@ func (s *QAService) Create(ctx context.Context, workspaceID uuid.UUID, req model
 	pid := fmt.Sprintf("qa_%s", qa.ID.String())
 	qa.PineconeID = pid
 	_, _ = s.db.ExecContext(ctx, `UPDATE qa_pairs SET pinecone_id=$1 WHERE id=$2`, pid, qa.ID)
-	if s.pinecone != nil {
+
+	// Upsert to Pinecone only if embedding succeeded
+	if embedErr == nil && s.pinecone != nil {
 		_ = s.pinecone.UpsertVectors(ctx, ns.PineconeNS, []VectorRecord{{
 			ID:     pid,
 			Values: vec,
@@ -63,11 +64,20 @@ func (s *QAService) Create(ctx context.Context, workspaceID uuid.UUID, req model
 	return qa, nil
 }
 
-func (s *QAService) List(ctx context.Context, workspaceID, namespaceID uuid.UUID) ([]models.QAPair, error) {
-	rows, err := s.db.QueryContext(ctx, `
-        SELECT id, workspace_id, namespace_id, question, answer, tags, is_strict, pinecone_id, created_at, updated_at
-        FROM qa_pairs WHERE workspace_id=$1 AND namespace_id=$2 ORDER BY created_at DESC`,
-		workspaceID, namespaceID)
+func (s *QAService) List(ctx context.Context, workspaceID uuid.UUID, namespaceID *uuid.UUID) ([]models.QAPair, error) {
+	var rows *sql.Rows
+	var err error
+	if namespaceID != nil {
+		rows, err = s.db.QueryContext(ctx, `
+            SELECT id, workspace_id, namespace_id, question, answer, tags, is_strict, pinecone_id, created_at, updated_at
+            FROM qa_pairs WHERE workspace_id=$1 AND namespace_id=$2 ORDER BY created_at DESC`,
+			workspaceID, *namespaceID)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+            SELECT id, workspace_id, namespace_id, question, answer, tags, is_strict, pinecone_id, created_at, updated_at
+            FROM qa_pairs WHERE workspace_id=$1 ORDER BY created_at DESC`,
+			workspaceID)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -434,11 +434,17 @@ func (s *VKService) finishGroupOAuth(ctx context.Context, code string, pending p
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO vk_integrations
 			(id, user_id, group_id, group_token_enc, group_token_iv,
-			 group_name, group_screen_name, group_photo, is_active)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE)
+			 group_name, group_screen_name, group_photo, is_active, token_source)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,'oauth')
 		ON CONFLICT (user_id, group_id) DO UPDATE SET
-			group_token_enc   = EXCLUDED.group_token_enc,
-			group_token_iv    = EXCLUDED.group_token_iv,
+			-- Never overwrite a manually-created token: VK panel tokens have
+			-- 'messages' permission; VK ID OAuth tokens do not.
+			group_token_enc   = CASE WHEN vk_integrations.token_source = 'manual'
+			                         THEN vk_integrations.group_token_enc
+			                         ELSE EXCLUDED.group_token_enc END,
+			group_token_iv    = CASE WHEN vk_integrations.token_source = 'manual'
+			                         THEN vk_integrations.group_token_iv
+			                         ELSE EXCLUDED.group_token_iv END,
 			group_name        = EXCLUDED.group_name,
 			group_screen_name = EXCLUDED.group_screen_name,
 			group_photo       = EXCLUDED.group_photo,
@@ -505,11 +511,12 @@ func (s *VKService) SaveCommunityToken(ctx context.Context, userID uuid.UUID, gr
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO vk_integrations
 			(id, user_id, group_id, group_token_enc, group_token_iv,
-			 group_name, group_screen_name, group_photo, is_active)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE)
+			 group_name, group_screen_name, group_photo, is_active, token_source)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,'manual')
 		ON CONFLICT (user_id, group_id) DO UPDATE SET
 			group_token_enc   = EXCLUDED.group_token_enc,
 			group_token_iv    = EXCLUDED.group_token_iv,
+			token_source      = 'manual',
 			group_name        = EXCLUDED.group_name,
 			group_screen_name = EXCLUDED.group_screen_name,
 			group_photo       = EXCLUDED.group_photo,
@@ -537,6 +544,11 @@ func (s *VKService) SaveCommunityToken(ctx context.Context, userID uuid.UUID, gr
 
 // GetAdminGroups returns the VK groups where the authenticated user is an admin.
 // IsConnected is set to true when the group is already connected in inBeTwin.
+//
+// VK ID 2.0 tokens (issued by id.vk.com) cannot call groups.get with filter=admin
+// due to profile-type restrictions (error 1051). In that case we fall back to
+// returning the already-connected groups from vk_integrations so the user can
+// still manage their existing connections. New groups can be added via group_id.
 func (s *VKService) GetAdminGroups(ctx context.Context, userID uuid.UUID) ([]models.VKAdminGroup, error) {
 	userToken, err := s.loadUserToken(ctx, userID)
 	if err != nil {
@@ -544,27 +556,65 @@ func (s *VKService) GetAdminGroups(ctx context.Context, userID uuid.UUID) ([]mod
 	}
 
 	client := vkapi.NewUserClient(userToken)
-	groups, err := client.GroupsGetAdmin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("groups.get: %w", err)
-	}
+	apiGroups, apiErr := client.GroupsGetAdmin(ctx)
 
-	// Build a set of already-connected group IDs for this user.
-	connected := make(map[int64]bool)
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT group_id FROM vk_integrations WHERE user_id=$1 AND is_active=TRUE`, userID)
-	if err == nil {
+	// --- Fall back: load connected groups from DB when VK API is unavailable ---
+	type dbRow struct {
+		id          uuid.UUID
+		groupID     int64
+		groupName   string
+		screenName  string
+		groupToken  string
+	}
+	var dbGroups []dbRow
+	rows, qErr := s.db.QueryContext(ctx,
+		`SELECT id, group_id, COALESCE(group_name,''), COALESCE(group_screen_name,''),
+		        group_token_enc, group_token_iv
+		 FROM vk_integrations WHERE user_id=$1 AND is_active=TRUE`, userID)
+	if qErr == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var gid int64
-			if rows.Scan(&gid) == nil {
-				connected[gid] = true
+			var r dbRow
+			var enc, iv []byte
+			if rows.Scan(&r.id, &r.groupID, &r.groupName, &r.screenName, &enc, &iv) == nil {
+				r.groupToken, _ = s.decryptToken(enc, iv)
+				dbGroups = append(dbGroups, r)
 			}
 		}
 	}
 
-	result := make([]models.VKAdminGroup, 0, len(groups))
-	for _, g := range groups {
+	if apiErr != nil {
+		// VK ID 2.0 / profile-type restriction — return DB rows enriched via groups.getById
+		result := make([]models.VKAdminGroup, 0, len(dbGroups))
+		for _, r := range dbGroups {
+			ag := models.VKAdminGroup{
+				GroupID:     r.groupID,
+				Name:        r.groupName,
+				ScreenName:  r.screenName,
+				IsConnected: true,
+			}
+			// Try to enrich with live metadata using the community token
+			if r.groupToken != "" {
+				if g, err := vkapi.NewClient(r.groupToken, r.groupID).GroupsGetByID(ctx, r.groupID); err == nil {
+					ag.Name = g.Name
+					ag.ScreenName = g.ScreenName
+					ag.Photo = g.Photo200
+					ag.MembersCount = g.MembersCount
+				}
+			}
+			result = append(result, ag)
+		}
+		return result, nil
+	}
+
+	// Normal path: API returned groups successfully.
+	connected := make(map[int64]bool)
+	for _, r := range dbGroups {
+		connected[r.groupID] = true
+	}
+
+	result := make([]models.VKAdminGroup, 0, len(apiGroups))
+	for _, g := range apiGroups {
 		result = append(result, models.VKAdminGroup{
 			GroupID:      g.ID,
 			Name:         g.Name,
@@ -1011,6 +1061,19 @@ func (s *VKService) loadUserToken(ctx context.Context, userID uuid.UUID) (string
 		return "", fmt.Errorf("not_found: VK user connection not found — complete user OAuth first")
 	}
 	return s.decryptToken(enc, iv)
+}
+
+// GetGroupIDByIntegration returns the group_id for a given integration (used by CommunityAccessStart).
+func (s *VKService) GetGroupIDByIntegration(ctx context.Context, userID, integrationID uuid.UUID) (int64, error) {
+	var groupID int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT group_id FROM vk_integrations WHERE id=$1 AND user_id=$2 AND is_active=TRUE`,
+		integrationID, userID,
+	).Scan(&groupID)
+	if err != nil {
+		return 0, fmt.Errorf("integration not found")
+	}
+	return groupID, nil
 }
 
 // loadIntegration fetches the integration and decrypts its group token.
