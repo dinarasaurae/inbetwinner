@@ -2,8 +2,9 @@ package services
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"sort"
+	"strings"
 
 	"github.com/dinarasaurae/inbetwin-rag-service/internal/database"
 	"github.com/google/uuid"
@@ -33,6 +34,79 @@ type SearchResult struct {
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 }
 
+// buildORQuery converts a natural-language query into a PostgreSQL tsquery
+// that matches rows containing ANY significant word.
+//
+// Rules:
+//   - Tokenises on non-alphanumeric characters
+//   - Keeps tokens ≥ 2 runes
+//   - Drops pure-digit tokens (e.g. "3", "10") — they are ubiquitous in
+//     dosage text ("по 3 капсулы", "3 раза в день") and cause false boosts
+//   - Alphanumeric tokens like "д3", "q10", "b12" are kept as product identifiers
+//
+// Example: "расскажи про омега 3"  → "расскажи | про | омега"
+// Example: "витамин д3 дозировка"  → "витамин | д3 | дозировка"
+func buildORQuery(query string) string {
+	var words []string
+	current := strings.Builder{}
+
+	isDigitRune := func(r rune) bool { return r >= '0' && r <= '9' }
+	isAlpha := func(r rune) bool {
+		return (r >= 'а' && r <= 'я') || r == 'ё' || (r >= 'a' && r <= 'z')
+	}
+	isAlphaNum := func(r rune) bool { return isAlpha(r) || isDigitRune(r) }
+
+	flush := func() {
+		w := current.String()
+		current.Reset()
+		if len([]rune(w)) < 2 {
+			return
+		}
+		// Skip pure-digit tokens — too common in dosage instructions
+		onlyDigits := true
+		for _, r := range w {
+			if !isDigitRune(r) {
+				onlyDigits = false
+				break
+			}
+		}
+		if onlyDigits {
+			return
+		}
+		words = append(words, w)
+	}
+
+	for _, r := range strings.ToLower(query) {
+		if isAlphaNum(r) {
+			current.WriteRune(r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+
+	if len(words) == 0 {
+		return "''"
+	}
+
+	// Deduplicate preserving order
+	seen := map[string]bool{}
+	var unique []string
+	for _, w := range words {
+		if !seen[w] {
+			seen[w] = true
+			unique = append(unique, w)
+		}
+	}
+	// Build the OR tsquery using russian config so stems match correctly.
+	// e.g. "дозировке" → stem "дозировк" matches stored "дозировка"
+	quotedTerms := make([]string, len(unique))
+	for i, w := range unique {
+		quotedTerms[i] = w
+	}
+	return strings.Join(quotedTerms, " | ")
+}
+
 func NewSearchService(db *database.DB, emb *EmbeddingService, pc *PineconeService, ns *NamespaceService) *SearchService {
 	return &SearchService{db: db, embedding: emb, pinecone: pc, nsSvc: ns}
 }
@@ -45,86 +119,92 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 		req.MinScore = 0.70
 	}
 
-	queryVec, err := s.embedding.EmbedText(ctx, req.Query)
-	if err != nil {
-		return nil, fmt.Errorf("embed query: %w", err)
-	}
-
-	// Resolve namespace names -> Pinecone NS strings
-	var pineconeNSList []string
-	if len(req.Namespaces) > 0 {
-		for _, nsName := range req.Namespaces {
-			rows, err := s.db.QueryContext(ctx, `SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND name=$2 AND is_active=true`, req.WorkspaceID, nsName)
-			if err != nil {
-				continue
-			}
-			for rows.Next() {
-				var pns string
-				_ = rows.Scan(&pns)
-				pineconeNSList = append(pineconeNSList, pns)
-			}
-			rows.Close()
-		}
-	} else {
-		// All active namespaces for workspace
-		rows, _ := s.db.QueryContext(ctx, `SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND is_active=true`, req.WorkspaceID)
-		if rows != nil {
-			defer rows.Close()
-			for rows.Next() {
-				var pns string
-				_ = rows.Scan(&pns)
-				pineconeNSList = append(pineconeNSList, pns)
-			}
-		}
-	}
-
-	// --- Vector search (Pinecone) ---
 	type ranked struct {
 		result SearchResult
-		rank   int // 1-indexed position
+		rank   int
 	}
+
 	vectorRanked := make(map[string]ranked)
 	vectorOrder := []string{}
-	rank := 1
-	for _, ns := range pineconeNSList {
-		results, err := s.pinecone.QueryVectors(ctx, ns, queryVec, uint32(req.TopK*2), nil)
-		if err != nil {
-			continue
+
+	// --- Vector search (Pinecone) — non-fatal ---
+	queryVec, embedErr := s.embedding.EmbedText(ctx, req.Query)
+	if embedErr != nil {
+		log.Printf("[search] embed query failed (skipping vector search): %v", embedErr)
+	} else if s.pinecone != nil {
+		// Resolve namespace names → Pinecone NS strings
+		var pineconeNSList []string
+		if len(req.Namespaces) > 0 {
+			for _, nsName := range req.Namespaces {
+				rows, err := s.db.QueryContext(ctx,
+					`SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND name=$2 AND is_active=true`,
+					req.WorkspaceID, nsName)
+				if err != nil {
+					continue
+				}
+				for rows.Next() {
+					var pns string
+					_ = rows.Scan(&pns)
+					pineconeNSList = append(pineconeNSList, pns)
+				}
+				rows.Close()
+			}
+		} else {
+			rows, _ := s.db.QueryContext(ctx,
+				`SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND is_active=true`,
+				req.WorkspaceID)
+			if rows != nil {
+				defer rows.Close()
+				for rows.Next() {
+					var pns string
+					_ = rows.Scan(&pns)
+					pineconeNSList = append(pineconeNSList, pns)
+				}
+			}
 		}
-		for _, r := range results {
-			if r.Score < req.MinScore {
+
+		rank := 1
+		for _, ns := range pineconeNSList {
+			results, err := s.pinecone.QueryVectors(ctx, ns, queryVec, uint32(req.TopK*2), nil)
+			if err != nil {
+				log.Printf("[search] pinecone query ns=%s: %v", ns, err)
 				continue
 			}
-			text, _ := r.Metadata["text"].(string)
-			source, _ := r.Metadata["source"].(string)
-			docID, _ := r.Metadata["document_id"].(string)
-			chunkIdx := 0
-			if ci, ok := r.Metadata["chunk_index"].(float64); ok {
-				chunkIdx = int(ci)
+			for _, r := range results {
+				if r.Score < req.MinScore {
+					continue
+				}
+				text, _ := r.Metadata["text"].(string)
+				source, _ := r.Metadata["source"].(string)
+				docID, _ := r.Metadata["document_id"].(string)
+				chunkIdx := 0
+				if ci, ok := r.Metadata["chunk_index"].(float64); ok {
+					chunkIdx = int(ci)
+				}
+				vectorRanked[r.ID] = ranked{
+					result: SearchResult{
+						Text:       text,
+						Score:      r.Score,
+						Source:     source,
+						DocumentID: docID,
+						ChunkIndex: chunkIdx,
+						Metadata:   r.Metadata,
+					},
+					rank: rank,
+				}
+				vectorOrder = append(vectorOrder, r.ID)
+				rank++
 			}
-			vectorRanked[r.ID] = ranked{
-				result: SearchResult{
-					Text:       text,
-					Score:      r.Score,
-					Source:     source,
-					DocumentID: docID,
-					ChunkIndex: chunkIdx,
-					Metadata:   r.Metadata,
-				},
-				rank: rank,
-			}
-			vectorOrder = append(vectorOrder, r.ID)
-			rank++
 		}
 	}
 
-	// --- BM25 via PostgreSQL full-text search ---
+	// --- BM25: document chunks (PostgreSQL FTS) ---
 	bm25Ranked := make(map[string]ranked)
 	bm25Order := []string{}
 	ftsRows, err := s.db.QueryContext(ctx, `
-        SELECT pinecone_id, text, ts_rank_cd(search_vector, plainto_tsquery('simple', $1)) as rank
+        SELECT pinecone_id, text, ts_rank_cd(search_vector, plainto_tsquery('russian', $1)) as rank
         FROM knowledge_chunks
-        WHERE workspace_id=$2 AND search_vector @@ plainto_tsquery('simple', $1)
+        WHERE workspace_id=$2 AND search_vector @@ plainto_tsquery('russian', $1)
         ORDER BY rank DESC LIMIT $3`,
 		req.Query, req.WorkspaceID, req.TopK*2,
 	)
@@ -143,6 +223,50 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 		}
 	}
 
+	// --- BM25: table rows (PostgreSQL FTS on knowledge_table_rows) ---
+	// Use OR-based tsquery so conversational queries ("расскажи про омега")
+	// still match as long as at least one keyword is present in the row.
+	tableRanked := make(map[string]ranked)
+	tableOrder := []string{}
+	orQuery := buildORQuery(req.Query)
+	tableRows, err := s.db.QueryContext(ctx, `
+        SELECT ktr.id::text, ktr.text,
+               ts_rank_cd(ktr.search_vector, to_tsquery('russian', $1)) as rank,
+               kt.name as table_name
+        FROM knowledge_table_rows ktr
+        JOIN knowledge_tables kt ON kt.id = ktr.table_id
+        WHERE ktr.workspace_id=$2
+          AND ktr.search_vector @@ to_tsquery('russian', $1)
+        ORDER BY rank DESC LIMIT $3`,
+		orQuery, req.WorkspaceID, req.TopK*2,
+	)
+	if err == nil {
+		defer tableRows.Close()
+		tRank := 1
+		for tableRows.Next() {
+			var id, text, tableName string
+			var score float32
+			if err := tableRows.Scan(&id, &text, &score, &tableName); err != nil {
+				continue
+			}
+			tableRanked[id] = ranked{
+				result: SearchResult{
+					Text:   text,
+					Score:  score,
+					Source: "table",
+					Metadata: map[string]interface{}{
+						"table_name": tableName,
+					},
+				},
+				rank: tRank,
+			}
+			tableOrder = append(tableOrder, id)
+			tRank++
+		}
+	} else {
+		log.Printf("[search] table rows FTS query failed: %v", err)
+	}
+
 	// --- Reciprocal Rank Fusion (k=60) ---
 	const k = 60.0
 	rrfScores := make(map[string]float64)
@@ -156,6 +280,12 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 		rrfScores[id] += 1.0 / (k + float64(i+1))
 		if _, exists := rrfResults[id]; !exists {
 			rrfResults[id] = bm25Ranked[id].result
+		}
+	}
+	for i, id := range tableOrder {
+		rrfScores[id] += 1.0 / (k + float64(i+1))
+		if _, exists := rrfResults[id]; !exists {
+			rrfResults[id] = tableRanked[id].result
 		}
 	}
 
