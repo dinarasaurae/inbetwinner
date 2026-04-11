@@ -476,26 +476,38 @@ func (s *SheetsService) SyncSheet(ctx context.Context, workspaceID uuid.UUID, re
 		)
 	}
 
-	// Embed + upsert to Pinecone — non-fatal
-	embeddings, embedErr := s.embedding.EmbedBatch(ctx, rowTexts)
-	if embedErr == nil && s.pinecone != nil {
-		var vectors []VectorRecord
-		for i, text := range rowTexts {
-			vectors = append(vectors, VectorRecord{
-				ID:     fmt.Sprintf("table_%s_%d", tableID.String(), i),
-				Values: embeddings[i],
-				Metadata: map[string]interface{}{
-					"workspace_id": workspaceID.String(),
-					"table_id":     tableID.String(),
-					"row_index":    float64(i),
-					"text":         text,
-					"source":       "table",
-				},
-			})
-		}
-		if upsertErr := s.pinecone.UpsertVectors(ctx, ns.PineconeNS, vectors); upsertErr == nil {
-			status = "indexed"
-			_, _ = s.db.ExecContext(ctx, `UPDATE knowledge_tables SET status='indexed' WHERE id=$1`, tableID)
+	// Embed + upsert to Pinecone — opt-in via enable_embedding flag (costs tokens).
+	// When disabled, rows are still searchable via BM25 (free).
+	if req.EnableEmbedding && s.pinecone != nil {
+		embeddings, embedErr := s.embedding.EmbedBatch(ctx, rowTexts)
+		if embedErr == nil {
+			var vectors []VectorRecord
+			for i, text := range rowTexts {
+				vecID := fmt.Sprintf("table_%s_%d", tableID.String(), i)
+				vectors = append(vectors, VectorRecord{
+					ID:     vecID,
+					Values: embeddings[i],
+					Metadata: map[string]interface{}{
+						"workspace_id": workspaceID.String(),
+						"table_id":     tableID.String(),
+						"row_index":    float64(i),
+						"text":         text,
+						"source":       "table",
+					},
+				})
+			}
+			if upsertErr := s.pinecone.UpsertVectors(ctx, ns.PineconeNS, vectors); upsertErr == nil {
+				status = "indexed"
+				_, _ = s.db.ExecContext(ctx, `UPDATE knowledge_tables SET status='indexed' WHERE id=$1`, tableID)
+				// Update pinecone_id so hybrid search can correlate vector hits with rows.
+				for i := range rowTexts {
+					vecID := fmt.Sprintf("table_%s_%d", tableID.String(), i)
+					_, _ = s.db.ExecContext(ctx,
+						`UPDATE knowledge_table_rows SET pinecone_id=$1 WHERE table_id=$2 AND row_index=$3`,
+						vecID, tableID, i,
+					)
+				}
+			}
 		}
 	}
 
