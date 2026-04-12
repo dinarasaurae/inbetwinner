@@ -47,6 +47,7 @@ type VKService struct {
 	cfg           *config.Config
 	llmClient     *VKLLMClient       // nil when LLM_SERVICE_URL is not configured
 	draftProvider ChatCompletionProvider
+	pushClient    *PushNotificationClient // nil when AUTH_SERVICE_URL is not configured
 
 	// oauthStates stores short-lived CSRF nonces for all OAuth flows.
 	oauthMu     sync.Mutex
@@ -70,6 +71,7 @@ func NewVKService(db *database.DB, enc *crypto.Encryptor, cfg *config.Config) *V
 		cfg:           cfg,
 		llmClient:     llmClient,
 		draftProvider: NewChatCompletionProvider(cfg),
+		pushClient:    NewPushNotificationClient(cfg.AuthServiceURL),
 		oauthStates:   make(map[string]pendingOAuth),
 		workerCancels: make(map[uuid.UUID]context.CancelFunc),
 	}

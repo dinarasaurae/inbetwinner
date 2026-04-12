@@ -115,6 +115,10 @@ func main() {
 	notifications.Post("/device-token", notificationHandler.RegisterToken)
 	notifications.Delete("/device-token", notificationHandler.UnregisterToken)
 
+	// ── Internal endpoints (Docker network only, not exposed via API Gateway) ─
+	internal := app.Group("/internal")
+	internal.Post("/notifications/push", notificationHandler.InternalSendPush)
+
 	api.Get("/test", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"service": "auth",
