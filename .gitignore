@@ -25,6 +25,11 @@ config/secrets.*
 *.pem
 *.crt
 
+# Firebase service account (never commit this)
+secrets/
+*adminsdk*.json
+*serviceAccount*.json
+
 # Database
 *.db
 *.sqlite*

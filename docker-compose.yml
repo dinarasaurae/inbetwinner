@@ -105,6 +105,14 @@ services:
 
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
 
+      # Firebase Cloud Messaging (push notifications)
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-inbetwin-crm}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/secrets/firebase-adminsdk.json
+
+    volumes:
+      # Mount the Firebase service account key (do NOT commit this file to git)
+      - ./secrets/firebase-adminsdk.json:/app/secrets/firebase-adminsdk.json:ro
+
     ports:
       - "3001:3001"
     depends_on:
