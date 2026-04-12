@@ -169,6 +169,11 @@ func main() {
 		return proxyService.ProxyRequest(c, cfg.LeadScoringServiceURL)
 	})
 
+	notifications := protected.Group("/notifications")
+	notifications.All("/*", func(c fiber.Ctx) error {
+		return proxyService.ProxyRequest(c, cfg.AuthServiceURL)
+	})
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 

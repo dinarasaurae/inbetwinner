@@ -42,9 +42,11 @@ func main() {
 
 	jwtService := jwtlib.NewService(cfg.JWTSecret, cfg.JWTAccessExpiration, cfg.JWTRefreshExpiration)
 	authService := services.NewAuthService(db, jwtService)
+	notificationService := services.NewNotificationService(db)
 
 	authHandler := handlers.NewAuthHandler(authService, jwtService)
 	vkAuthHandler := handlers.NewVKAuthHandler(authService, jwtService, cfg.VKAndroidClientID)
+	notificationHandler := handlers.NewNotificationHandler(notificationService)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "inBeTwin Auth Service",
@@ -107,6 +109,11 @@ func main() {
 	authProtected := auth.Group("", jwtlib.AuthMiddleware(jwtService))
 	authProtected.Get("/profile", authHandler.GetProfile)
 	authProtected.Put("/profile", authHandler.UpdateProfile)
+
+	// ── Notifications (device token registration) ────────────────────────────
+	notifications := api.Group("/notifications", jwtlib.AuthMiddleware(jwtService))
+	notifications.Post("/device-token", notificationHandler.RegisterToken)
+	notifications.Delete("/device-token", notificationHandler.UnregisterToken)
 
 	api.Get("/test", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{
