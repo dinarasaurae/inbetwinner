@@ -137,8 +137,9 @@ func (s *NotificationService) SendPushToUser(ctx context.Context, payload PushPa
 	return nil
 }
 
-// getAccessToken returns a cached OAuth2 access token for the Firebase service account.
-// Tokens are cached for their lifetime (~1 hour) to avoid repeated auth calls.
+// getAccessToken returns a cached OAuth2 access token.
+// Uses Application Default Credentials — reads GOOGLE_APPLICATION_CREDENTIALS
+// env var which points to the service account JSON file path.
 func (s *NotificationService) getAccessToken(ctx context.Context) (string, error) {
 	s.tokenMu.Lock()
 	defer s.tokenMu.Unlock()
@@ -148,14 +149,10 @@ func (s *NotificationService) getAccessToken(ctx context.Context) (string, error
 		return s.cachedToken, nil
 	}
 
-	saJSON := os.Getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-	if saJSON == "" {
-		return "", fmt.Errorf("GOOGLE_SERVICE_ACCOUNT_JSON env var not set")
-	}
-
-	creds, err := google.CredentialsFromJSON(ctx, []byte(saJSON), fcmScope)
+	// google.FindDefaultCredentials automatically reads GOOGLE_APPLICATION_CREDENTIALS
+	creds, err := google.FindDefaultCredentials(ctx, fcmScope)
 	if err != nil {
-		return "", fmt.Errorf("parse service account: %w", err)
+		return "", fmt.Errorf("firebase credentials not found (set GOOGLE_APPLICATION_CREDENTIALS): %w", err)
 	}
 
 	token, err := creds.TokenSource.Token()
