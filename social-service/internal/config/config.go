@@ -82,8 +82,9 @@ type Config struct {
 	LLMBaseURL  string
 	LLMModel    string
 
-	RAGServiceURL string
-	LLMServiceURL string
+	RAGServiceURL  string
+	LLMServiceURL  string
+	AuthServiceURL string
 
 	// LLMOrchestrationMode controls the inbound-message processing path.
 	//   legacy      — use the built-in vk_agent local draft provider
@@ -222,6 +223,7 @@ func Load() *Config {
 
 		RAGServiceURL:        getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
 		LLMServiceURL:        getEnv("LLM_SERVICE_URL", "http://llm-service:3005"),
+		AuthServiceURL:       getEnv("AUTH_SERVICE_URL", "http://auth-service:3001"),
 		LLMOrchestrationMode: getEnv("LLM_ORCHESTRATION_MODE", "legacy"),
 	}
 }

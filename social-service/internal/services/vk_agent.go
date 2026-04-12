@@ -177,6 +177,13 @@ func (s *VKService) processInboundMessage(ctx context.Context, userID, integrati
 		return
 	}
 
+	// Notify the workspace owner about the new incoming message.
+	go s.pushClient.SendToUser(ctx, userID, InternalPushRequest{
+		Type:  "NEW_MESSAGE",
+		Title: "Новое сообщение",
+		Body:  "Клиент написал вам в VK",
+	})
+
 	switch s.effectiveOrchestrationMode(settings) {
 	case "llm_service":
 		s.processInboundMessageLLM(ctx, userID, integrationID, messageID, false, settings)

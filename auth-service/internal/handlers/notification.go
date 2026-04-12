@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 
@@ -60,6 +62,41 @@ func (h *NotificationHandler) UnregisterToken(c fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"ok": true})
+}
+
+// POST /internal/notifications/push
+// Internal-only endpoint (not exposed via API Gateway).
+// Called by other microservices to send a push to a user's devices.
+func (h *NotificationHandler) InternalSendPush(c fiber.Ctx) error {
+	var req struct {
+		UserID   string            `json:"user_id"`
+		Type     string            `json:"type"`
+		Title    string            `json:"title"`
+		Body     string            `json:"body"`
+		Data     map[string]string `json:"data,omitempty"`
+		DeepLink string            `json:"deep_link,omitempty"`
+	}
+	if err := c.Bind().JSON(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	userID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid user_id"})
+	}
+
+	go func() {
+		_ = h.svc.SendPushToUser(context.Background(), services.PushPayload{
+			UserID:   userID,
+			Type:     req.Type,
+			Title:    req.Title,
+			Body:     req.Body,
+			Data:     req.Data,
+			DeepLink: req.DeepLink,
+		})
+	}()
+
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"ok": true})
 }
 
 // extractUserID pulls the user UUID from locals set by AuthMiddleware.
