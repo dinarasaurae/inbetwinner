@@ -91,6 +91,25 @@ func (c *Client) GetDefaultAgent(ctx context.Context, workspaceID uuid.UUID, pla
 	return nil, nil
 }
 
+// ListActiveAgents returns all active agents for a workspace on the given platform.
+// Used by the router agent to pick between multiple configured agents.
+func (c *Client) ListActiveAgents(ctx context.Context, workspaceID uuid.UUID, platform string) ([]AgentConfig, error) {
+	all, err := c.listAgents(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	var out []AgentConfig
+	for _, a := range all {
+		if a.Status != "active" {
+			continue
+		}
+		if a.Platform == platform || a.Platform == "all" || platform == "" {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // GetAgentByID fetches a specific agent. Returns nil if not found (404).
 func (c *Client) GetAgentByID(ctx context.Context, workspaceID, agentID uuid.UUID) (*AgentConfig, error) {
 	url := fmt.Sprintf("%s/agent/agents/%s", c.baseURL, agentID)

@@ -60,6 +60,18 @@ var SaveContactSchema = openai.FunctionDefinition{
 	}`),
 }
 
+var CallOperatorSchema = openai.FunctionDefinition{
+	Name:        "call_operator",
+	Description: "Escalate the conversation to a human operator. Use when you cannot answer the question, need authorisation, or the user explicitly asks to speak with a person.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"reason":{"type":"string","description":"Why the conversation needs to be escalated to a human operator"}
+		},
+		"required":["reason"]
+	}`),
+}
+
 type BuiltinHandler struct {
 	calSvc *calendar.Service
 	db     *database.DB

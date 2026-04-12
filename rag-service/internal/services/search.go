@@ -23,6 +23,10 @@ type SearchRequest struct {
 	Namespaces  []string  `json:"namespaces"`
 	TopK        int       `json:"top_k"`
 	MinScore    float32   `json:"min_score"`
+	// AccessMode filters namespaces when no explicit list is given.
+	// "AUTO_QUERY" returns only automatically-queried namespaces (default for LLM pipeline).
+	// "" or "ALL" returns all active namespaces.
+	AccessMode string `json:"access_mode"`
 }
 
 type SearchResult struct {
@@ -150,9 +154,12 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 				rows.Close()
 			}
 		} else {
-			rows, _ := s.db.QueryContext(ctx,
-				`SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND is_active=true`,
-				req.WorkspaceID)
+			// No explicit namespace list — apply access_mode filter if requested.
+			query := `SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND is_active=true`
+			if req.AccessMode == "AUTO_QUERY" {
+				query += ` AND access_mode='AUTO_QUERY'`
+			}
+			rows, _ := s.db.QueryContext(ctx, query, req.WorkspaceID)
 			if rows != nil {
 				defer rows.Close()
 				for rows.Next() {
@@ -201,11 +208,26 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 	// --- BM25: document chunks (PostgreSQL FTS) ---
 	bm25Ranked := make(map[string]ranked)
 	bm25Order := []string{}
-	ftsRows, err := s.db.QueryContext(ctx, `
-        SELECT pinecone_id, text, ts_rank_cd(search_vector, plainto_tsquery('russian', $1)) as rank
-        FROM knowledge_chunks
-        WHERE workspace_id=$2 AND search_vector @@ plainto_tsquery('russian', $1)
-        ORDER BY rank DESC LIMIT $3`,
+
+	// When access_mode filter is set and no explicit namespaces, restrict BM25
+	// to chunks whose namespace has matching access_mode.
+	// knowledge_chunks → knowledge_documents → namespaces
+	chunkNSJoin := ""
+	chunkNSWhere := ""
+	if req.AccessMode == "AUTO_QUERY" && len(req.Namespaces) == 0 {
+		chunkNSJoin = `JOIN knowledge_documents kd ON kd.id = knowledge_chunks.document_id
+                       JOIN namespaces ns ON ns.id = kd.namespace_id`
+		chunkNSWhere = `AND ns.access_mode = 'AUTO_QUERY' AND ns.is_active = true`
+	}
+	chunkSQL := `
+        SELECT knowledge_chunks.pinecone_id, knowledge_chunks.text,
+               ts_rank_cd(knowledge_chunks.search_vector, plainto_tsquery('russian', $1)) as rank
+        FROM knowledge_chunks ` + chunkNSJoin + `
+        WHERE knowledge_chunks.workspace_id=$2
+          AND knowledge_chunks.search_vector @@ plainto_tsquery('russian', $1)
+          ` + chunkNSWhere + `
+        ORDER BY rank DESC LIMIT $3`
+	ftsRows, err := s.db.QueryContext(ctx, chunkSQL,
 		req.Query, req.WorkspaceID, req.TopK*2,
 	)
 	if err == nil {
@@ -229,15 +251,25 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 	tableRanked := make(map[string]ranked)
 	tableOrder := []string{}
 	orQuery := buildORQuery(req.Query)
-	tableRows, err := s.db.QueryContext(ctx, `
+
+	// Apply access_mode filter via knowledge_tables → namespaces join if needed.
+	tableNSJoin := ""
+	tableNSWhere := ""
+	if req.AccessMode == "AUTO_QUERY" && len(req.Namespaces) == 0 {
+		tableNSJoin = `JOIN namespaces ns ON ns.id = kt.namespace_id`
+		tableNSWhere = `AND ns.access_mode = 'AUTO_QUERY' AND ns.is_active = true`
+	}
+	tableSQL := `
         SELECT ktr.id::text, ktr.text,
                ts_rank_cd(ktr.search_vector, to_tsquery('russian', $1)) as rank,
                kt.name as table_name
         FROM knowledge_table_rows ktr
-        JOIN knowledge_tables kt ON kt.id = ktr.table_id
+        JOIN knowledge_tables kt ON kt.id = ktr.table_id ` + tableNSJoin + `
         WHERE ktr.workspace_id=$2
           AND ktr.search_vector @@ to_tsquery('russian', $1)
-        ORDER BY rank DESC LIMIT $3`,
+          ` + tableNSWhere + `
+        ORDER BY rank DESC LIMIT $3`
+	tableRows, err := s.db.QueryContext(ctx, tableSQL,
 		orQuery, req.WorkspaceID, req.TopK*2,
 	)
 	if err == nil {
