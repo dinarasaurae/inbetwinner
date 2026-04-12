@@ -50,6 +50,10 @@ func (d *Dispatcher) Execute(ctx context.Context, workspaceID uuid.UUID, chatUse
 		result, execErr = d.builtin.HandleCalendarList(ctx, workspaceID, argsJSON)
 	case "save_contact_info":
 		result, execErr = d.builtin.HandleSaveContact(ctx, workspaceID, chatUserID, platform, argsJSON)
+	case "call_operator":
+		// The LLMService detects this tool in usedTools and sends the AGENT_STUCK push.
+		// Here we just return a confirmation so the LLM can craft a polite message to the user.
+		result = `{"escalated":true,"message":"Оператор уведомлён и скоро свяжется с вами"}`
 	default:
 		tool, _ := d.registry.GetToolByName(ctx, workspaceID, toolName)
 		if tool == nil {

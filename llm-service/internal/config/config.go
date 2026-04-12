@@ -31,9 +31,12 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 
-	RAGServiceURL   string
-	AgentServiceURL string
+	RAGServiceURL        string
+	AgentServiceURL      string
+	LeadScoringServiceURL string
+	AuthServiceURL       string
 
+	HotLeadThreshold  int
 	MaxToolIterations int
 	HistorySize       int
 
@@ -69,9 +72,12 @@ func Load() *Config {
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:3005/llm/google/callback"),
 
-		RAGServiceURL:   getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
-		AgentServiceURL: getEnv("AGENT_SERVICE_URL", "http://agent-service:3003"),
+		RAGServiceURL:        getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
+		AgentServiceURL:      getEnv("AGENT_SERVICE_URL", "http://agent-service:3003"),
+		LeadScoringServiceURL: getEnv("LEAD_SCORING_SERVICE_URL", "http://lead-scoring-service:3006"),
+		AuthServiceURL:       getEnv("AUTH_SERVICE_URL", "http://auth-service:3001"),
 
+		HotLeadThreshold:  func() int { v, _ := strconv.Atoi(getEnv("HOT_LEAD_THRESHOLD", "80")); return v }(),
 		MaxToolIterations: maxIter,
 		HistorySize:       histSize,
 		RequestTimeout:    30 * time.Second,

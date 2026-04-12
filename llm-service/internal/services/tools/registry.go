@@ -53,6 +53,10 @@ func (r *Registry) GetTools(ctx context.Context, workspaceID uuid.UUID, hasGoogl
 	if allowed("builtin-save-contact") {
 		out = append(out, AvailableTool{Name: "save_contact_info", Definition: SaveContactSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-save-contact"})
 	}
+	// call_operator is always available — it's a safety valve for every agent.
+	if allowed("builtin-call-operator") {
+		out = append(out, AvailableTool{Name: "call_operator", Definition: CallOperatorSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-call-operator"})
+	}
 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, description, type, schema

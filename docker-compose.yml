@@ -331,6 +331,9 @@ services:
 
       RAG_SERVICE_URL: "http://rag-service:3004"
       AGENT_SERVICE_URL: "http://agent-service:3003"
+      LEAD_SCORING_SERVICE_URL: "http://lead-scoring-service:3006"
+      AUTH_SERVICE_URL: "http://auth-service:3001"
+      HOT_LEAD_THRESHOLD: ${HOT_LEAD_THRESHOLD:-80}
 
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -342,6 +345,8 @@ services:
       postgres:
         condition: service_healthy
       rag-service:
+        condition: service_healthy
+      lead-scoring-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3005/health"]

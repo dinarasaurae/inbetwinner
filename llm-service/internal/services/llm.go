@@ -91,6 +91,8 @@ type LLMService struct {
 	registry    *tools.Registry
 	dispatcher  *tools.Dispatcher
 	agentClient *agentsvc.Client
+	scoring     *ScoringClient
+	push        *LLMPushClient
 	cfg         *config.Config
 	httpClient  *http.Client
 }
@@ -108,6 +110,8 @@ func NewLLMService(
 		registry:    reg,
 		dispatcher:  disp,
 		agentClient: agentClient,
+		scoring:     NewScoringClient(cfg.LeadScoringServiceURL),
+		push:        NewLLMPushClient(cfg.AuthServiceURL),
 		cfg:         cfg,
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
 	}
@@ -131,7 +135,7 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 
 	// 5. Build the initial message array.
 	messages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: s.buildSystemPrompt(params.systemPmt, ragContext)},
+		{Role: openai.ChatMessageRoleSystem, Content: s.buildSystemPromptWithMemory(params.systemPmt, ragContext, req.Platform, req.ChatUserID)},
 	}
 	messages = append(messages, s.history.ToOpenAIMessages(histMsgs)...)
 	messages = append(messages, openai.ChatCompletionMessage{
@@ -190,6 +194,18 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 				messages = append(messages, s.dispatcher.ToToolMessage(tc, toolResult))
 				usedTools = append(usedTools, tc.Function.Name)
 			}
+			// If call_operator was triggered, send AGENT_STUCK push and stop the loop.
+			if containsTool(usedTools, "call_operator") {
+				s.push.SendAsync(req.WorkspaceID, NotifAgentStuck,
+					"⚠️ Требуется ваше внимание",
+					fmt.Sprintf("Агент не смог ответить пользователю %s (%s)", req.ChatUserID, req.Platform),
+					map[string]string{
+						"chat_user_id": req.ChatUserID,
+						"platform":     req.Platform,
+					},
+				)
+				// continue the loop so the LLM can say "operator is coming"
+			}
 			continue
 		}
 
@@ -202,6 +218,20 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 			Content:     answer,
 			TotalTokens: totalTokens,
 		})
+
+		// Async lead scoring — fire and forget; triggers HOT_LEAD push if score > threshold.
+		s.scoring.ScoreAsync(req.WorkspaceID, req.ChatUserID, req.Platform, req.Message, func(score *ScoreResult) {
+			s.push.SendAsync(req.WorkspaceID, NotifHotLead,
+				"🔥 Горячий лид!",
+				fmt.Sprintf("Пользователь %s (%s) набрал %d баллов", req.ChatUserID, req.Platform, score.Score),
+				map[string]string{
+					"chat_user_id": req.ChatUserID,
+					"platform":     req.Platform,
+					"score":        fmt.Sprintf("%d", score.Score),
+				},
+			)
+		})
+
 		return &ChatResponse{
 			AgentID:     agentID,
 			Response:    answer,
@@ -222,6 +252,8 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 
 // resolveAgentConfig fetches agent params + tool allowlist from agent-service.
 // On any error or missing agent it returns defaults (safe degradation).
+// When multiple active agents exist for the workspace+platform, a cheap router
+// LLM call is made to pick the best one.
 func (s *LLMService) resolveAgentConfig(ctx context.Context, req ChatRequest) (runtimeParams, *uuid.UUID, map[string]bool) {
 	defaultParams := defaultRuntimeParams(s.cfg)
 	if s.agentClient == nil {
@@ -237,7 +269,11 @@ func (s *LLMService) resolveAgentConfig(ctx context.Context, req ChatRequest) (r
 	if req.AgentID != nil {
 		agentCfg, err = s.agentClient.GetAgentByID(resolveCtx, req.WorkspaceID, *req.AgentID)
 	} else {
-		agentCfg, err = s.agentClient.GetDefaultAgent(resolveCtx, req.WorkspaceID, req.Platform)
+		// Try router: if multiple active agents, pick the best one via LLM.
+		agentCfg, err = s.routeAgent(resolveCtx, req)
+		if err != nil || agentCfg == nil {
+			agentCfg, err = s.agentClient.GetDefaultAgent(resolveCtx, req.WorkspaceID, req.Platform)
+		}
 	}
 	if err != nil {
 		log.Printf("agent-service resolve: %v (using defaults)", err)
@@ -272,7 +308,8 @@ func (s *LLMService) resolveAgentConfig(ctx context.Context, req ChatRequest) (r
 	if len(agentToolRows) == 0 {
 		// no explicit assignments → expose core builtins only
 		return params, &agentID, map[string]bool{
-			"builtin-save-contact": true,
+			"builtin-save-contact":  true,
+			"builtin-call-operator": true,
 		}
 	}
 	allowed := make(map[string]bool, len(agentToolRows))
@@ -282,13 +319,87 @@ func (s *LLMService) resolveAgentConfig(ctx context.Context, req ChatRequest) (r
 	return params, &agentID, allowed
 }
 
+// routeAgent picks the best agent when a workspace has more than one active agent
+// for the given platform. It uses a cheap model (gpt-4o-mini, temp=0) to
+// classify the incoming message and select the most relevant agent by name.
+// Returns nil (no error) when there is only one candidate — caller falls back to GetDefaultAgent.
+func (s *LLMService) routeAgent(ctx context.Context, req ChatRequest) (*agentsvc.AgentConfig, error) {
+	if s.agentClient == nil {
+		return nil, nil
+	}
+	agents, err := s.agentClient.ListActiveAgents(ctx, req.WorkspaceID, req.Platform)
+	if err != nil || len(agents) <= 1 {
+		return nil, nil // single agent or error → let caller use GetDefaultAgent
+	}
+
+	// Build a compact description list for the router prompt.
+	var descLines []string
+	for i, a := range agents {
+		desc := a.Name
+		if a.SystemPrompt != "" && len(a.SystemPrompt) > 120 {
+			desc += ": " + a.SystemPrompt[:120] + "…"
+		} else if a.SystemPrompt != "" {
+			desc += ": " + a.SystemPrompt
+		}
+		descLines = append(descLines, fmt.Sprintf("%d. %s", i+1, desc))
+	}
+
+	routerPrompt := fmt.Sprintf(`You are a router. Choose the most appropriate agent number for the user message.
+Agents:
+%s
+
+Reply with ONLY the agent number (1, 2, 3, …). No explanation.`, strings.Join(descLines, "\n"))
+
+	routerReq := openai.ChatCompletionRequest{
+		Model:       "gpt-4o-mini",
+		Temperature: 0.0,
+		MaxTokens:   5,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: routerPrompt},
+			{Role: openai.ChatMessageRoleUser, Content: req.Message},
+		},
+	}
+	resp, err := s.provider.CreateChatCompletion(ctx, routerReq)
+	if err != nil || len(resp.Choices) == 0 {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
+	for i, a := range agents {
+		if raw == fmt.Sprintf("%d", i+1) {
+			copy := a
+			return &copy, nil
+		}
+	}
+	return nil, nil // unrecognised answer → fall through to default
+}
+
 // --- prompt + RAG ---
 
 func (s *LLMService) buildSystemPrompt(base, ragContext string) string {
-	if ragContext == "" {
-		return base
+	return s.buildSystemPromptWithMemory(base, ragContext, "", "")
+}
+
+// buildSystemPromptWithMemory adds RAG context plus a light memory header
+// (platform + chat user identifier) so the LLM knows who it's talking to.
+func (s *LLMService) buildSystemPromptWithMemory(base, ragContext, platform, chatUserID string) string {
+	sb := strings.Builder{}
+	sb.WriteString(base)
+
+	if platform != "" || chatUserID != "" {
+		sb.WriteString("\n\n--- Контекст диалога ---")
+		if platform != "" {
+			sb.WriteString("\nПлатформа: " + platform)
+		}
+		if chatUserID != "" {
+			sb.WriteString("\nID пользователя: " + chatUserID)
+		}
+		sb.WriteString("\n--- Конец контекста ---")
 	}
-	return base + "\n\nКонтекст из базы знаний:\n" + ragContext
+
+	if ragContext != "" {
+		sb.WriteString("\n\nКонтекст из базы знаний:\n" + ragContext)
+	}
+	return sb.String()
 }
 
 // fetchRAGContext calls rag-service/rag/search, scoped to the agent's namespaces.
@@ -304,6 +415,7 @@ func (s *LLMService) fetchRAGContext(ctx context.Context, workspaceID uuid.UUID,
 		"workspace_id": workspaceID.String(),
 		"top_k":        topK,
 		"namespaces":   namespaces,
+		"access_mode":  "AUTO_QUERY", // only search namespaces with access_mode=AUTO_QUERY
 	})
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -419,8 +531,8 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 		}
 	}
 
-	// Build the system prompt, layering agent config + integration policy.
-	systemPrompt := s.buildVKSystemPrompt(params.systemPmt, req.Context, ragContext)
+	// Build the system prompt, layering agent config + integration policy + memory context.
+	systemPrompt := s.buildVKSystemPromptWithMemory(params.systemPmt, req.Context, ragContext, req.Platform, req.ChatUserID)
 
 	decisionTool := openai.Tool{
 		Type: openai.ToolTypeFunction,
@@ -519,6 +631,32 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 		TokensUsed:        totalTok,
 		AgentID:           agentID,
 	}
+
+	// If the agent decided to escalate, send AGENT_STUCK push to the workspace owner.
+	if args.Mode == "escalate" {
+		s.push.SendAsync(req.WorkspaceID, NotifAgentStuck,
+			"⚠️ Требуется ваше внимание",
+			fmt.Sprintf("Агент не смог ответить пользователю %s (%s): %s", req.ChatUserID, req.Platform, args.Rationale),
+			map[string]string{
+				"chat_user_id": req.ChatUserID,
+				"platform":     req.Platform,
+			},
+		)
+	}
+
+	// Async lead scoring — fires HOT_LEAD push if score is above threshold.
+	s.scoring.ScoreAsync(req.WorkspaceID, req.ChatUserID, req.Platform, req.Message, func(score *ScoreResult) {
+		s.push.SendAsync(req.WorkspaceID, NotifHotLead,
+			"🔥 Горячий лид!",
+			fmt.Sprintf("Пользователь %s (%s) набрал %d баллов", req.ChatUserID, req.Platform, score.Score),
+			map[string]string{
+				"chat_user_id": req.ChatUserID,
+				"platform":     req.Platform,
+				"score":        fmt.Sprintf("%d", score.Score),
+			},
+		)
+	})
+
 	return decision, nil
 }
 
@@ -572,6 +710,24 @@ func (s *LLMService) processSocialMessageJSONFallback(
 	}, nil
 }
 
+func (s *LLMService) buildVKSystemPromptWithMemory(agentBase string, ctx *SocialMsgContext, ragContext, platform, chatUserID string) string {
+	base := s.buildVKSystemPrompt(agentBase, ctx, ragContext)
+	if platform == "" && chatUserID == "" {
+		return base
+	}
+	sb := strings.Builder{}
+	sb.WriteString(base)
+	sb.WriteString("\n\n--- Контекст диалога ---")
+	if platform != "" {
+		sb.WriteString("\nПлатформа: " + platform)
+	}
+	if chatUserID != "" {
+		sb.WriteString("\nID пользователя: " + chatUserID)
+	}
+	sb.WriteString("\n--- Конец контекста ---")
+	return sb.String()
+}
+
 func (s *LLMService) buildVKSystemPrompt(agentBase string, ctx *SocialMsgContext, ragContext string) string {
 	sb := strings.Builder{}
 	sb.WriteString(agentBase)
@@ -618,6 +774,7 @@ func (s *LLMService) buildVKSystemPrompt(agentBase string, ctx *SocialMsgContext
 func (s *LLMService) buildVKJSONSystemPrompt(agentBase string, ctx *SocialMsgContext, ragContext string) string {
 	sb := strings.Builder{}
 	sb.WriteString(s.buildVKSystemPrompt(agentBase, ctx, ragContext))
+
 	sb.WriteString(`
 
 Вместо вызова функции верни только один JSON-объект без markdown, без code fences и без пояснений.
@@ -671,6 +828,15 @@ func parseVKDecisionContent(content string) (*vkDecisionArgs, error) {
 		parsed.Rationale = "json fallback"
 	}
 	return &parsed, nil
+}
+
+func containsTool(used []string, name string) bool {
+	for _, t := range used {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }
 
 func coalesceStr(a, b string) string {
