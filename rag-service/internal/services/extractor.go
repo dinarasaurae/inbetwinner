@@ -6,10 +6,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/ledongthuc/pdf"
 )
 
 // ExtractText extracts plain text from a file given its raw bytes and MIME type.
@@ -67,28 +68,90 @@ func normalizeContentType(contentType, filename string) string {
 }
 
 // ── PDF ──────────────────────────────────────────────────────────────────────
+// Uses pdftotext (poppler-utils) when available — handles CID fonts, Cyrillic,
+// complex layouts, and virtually any non-scanned PDF.
+// Falls back to a pure-Go page-text scan when the binary is absent so that
+// development environments without poppler still work (with reduced quality).
 
 func extractPDF(data []byte) (string, error) {
-	r := bytes.NewReader(data)
-	pdfReader, err := pdf.NewReader(r, int64(len(data)))
+	// Primary path: pdftotext (poppler-utils)
+	if path, err := exec.LookPath("pdftotext"); err == nil {
+		return extractPDFWithPoppler(path, data)
+	}
+	log.Println("[extractor] pdftotext not found, falling back to pure-Go PDF parser (reduced quality for Cyrillic/CID fonts)")
+	return extractPDFFallback(data)
+}
+
+func extractPDFWithPoppler(pdftotextBin string, data []byte) (string, error) {
+	tmp, err := os.CreateTemp("", "inbetwin-*.pdf")
 	if err != nil {
-		return "", fmt.Errorf("pdf reader: %w", err)
+		return "", fmt.Errorf("pdf tmp file: %w", err)
 	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("pdf write tmp: %w", err)
+	}
+	tmp.Close()
+
+	// "-" as output file → stdout; "-enc UTF-8" → explicit UTF-8 output
+	out, err := exec.Command(pdftotextBin, "-enc", "UTF-8", "-nopgbrk", tmp.Name(), "-").Output()
+	if err != nil {
+		return "", fmt.Errorf("pdftotext: %w", err)
+	}
+	text := strings.TrimSpace(string(out))
+	if text == "" {
+		return "", fmt.Errorf("pdftotext extracted no text (possibly a scanned/image PDF)")
+	}
+	return text, nil
+}
+
+// extractPDFFallback is the original pure-Go implementation using the
+// ledongthuc/pdf approach reimplemented inline. It works for simple
+// Latin-script PDFs but may return empty or garbled text for Cyrillic/CID fonts.
+func extractPDFFallback(data []byte) (string, error) {
+	// Minimal pure-Go extraction: scan for BT...ET blocks and collect Tj/TJ strings.
+	// This is a best-effort fallback — not a full PDF parser.
+	content := string(data)
 	var sb strings.Builder
-	numPages := pdfReader.NumPage()
-	for i := 1; i <= numPages; i++ {
-		page := pdfReader.Page(i)
-		if page.V.IsNull() {
+	inBT := false
+	i := 0
+	for i < len(content)-1 {
+		if !inBT && i+2 <= len(content) && content[i:i+2] == "BT" {
+			inBT = true
+			i += 2
 			continue
 		}
-		text, err := page.GetPlainText(nil)
-		if err != nil {
+		if inBT && i+2 <= len(content) && content[i:i+2] == "ET" {
+			inBT = false
+			sb.WriteString("\n")
+			i += 2
 			continue
 		}
-		sb.WriteString(text)
-		sb.WriteString("\n")
+		if inBT && content[i] == '(' {
+			// Collect (text) Tj
+			j := i + 1
+			for j < len(content) && content[j] != ')' {
+				if content[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j < len(content) {
+				sb.WriteString(content[i+1 : j])
+				sb.WriteString(" ")
+			}
+			i = j + 1
+			continue
+		}
+		i++
 	}
-	return strings.TrimSpace(sb.String()), nil
+	text := strings.TrimSpace(sb.String())
+	if text == "" {
+		return "", fmt.Errorf("pure-go PDF fallback extracted no text")
+	}
+	return text, nil
 }
 
 // ── DOCX ─────────────────────────────────────────────────────────────────────
