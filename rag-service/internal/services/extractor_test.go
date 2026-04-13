@@ -252,3 +252,79 @@ func TestChunkText_ReconstructsAllText(t *testing.T) {
 		}
 	}
 }
+
+// ── sliding-window overlap tests ─────────────────────────────────────────────
+
+func TestChunkDocText_OverlapCarriesContext(t *testing.T) {
+	// Build sentences that fit cleanly: each ~60 chars, chunkSize=100, overlap=30.
+	// Sentence A + B > 100 → two chunks.
+	// Chunk 2 should start with (part of) sentence B, not sentence C cold.
+	sentA := "Первое предложение о продукте."         // ~30 chars
+	sentB := "Второе предложение с важной деталью."   // ~37 chars
+	sentC := "Третье предложение о цене и условиях."  // ~38 chars
+	text := sentA + " " + sentB + " " + sentC
+
+	chunks := chunkDocText(text, 80, 30)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected ≥ 2 chunks, got %d: %v", len(chunks), chunks)
+	}
+	// At least one sentence from chunk 1 must appear in chunk 2 (overlap).
+	foundOverlap := false
+	for _, word := range strings.Fields(chunks[0]) {
+		if strings.Contains(chunks[1], word) {
+			foundOverlap = true
+			break
+		}
+	}
+	if !foundOverlap {
+		t.Errorf("no overlap between chunk[0] and chunk[1]\nchunk[0]: %q\nchunk[1]: %q", chunks[0], chunks[1])
+	}
+}
+
+func TestChunkDocText_NeverExceedsChunkSize(t *testing.T) {
+	// Generate a realistic mixed-length text and assert every chunk ≤ chunkSize.
+	sentences := []string{
+		"Краткое предложение.",
+		"Чуть более длинное предложение с подробностями о тарифах.",
+		"Ещё одно предложение — среднее по длине.",
+		"Очень длинное предложение, которое само по себе занимает много символов и проверяет граничный случай чанкера.",
+		"Финальное предложение.",
+	}
+	text := strings.Join(sentences, " ")
+	chunkSize := 80
+
+	chunks := chunkDocText(text, chunkSize, chunkSize/5)
+	for i, c := range chunks {
+		if len(c) > chunkSize {
+			t.Errorf("chunk[%d] len=%d exceeds chunkSize=%d: %q", i, len(c), chunkSize, c)
+		}
+	}
+}
+
+func TestChunkDocText_ZeroOverlapNoDuplication(t *testing.T) {
+	// With overlap=0 no content should appear in two consecutive chunks.
+	text := "Первое. Второе. Третье. Четвёртое. Пятое."
+	chunks := chunkDocText(text, 25, 0)
+	if len(chunks) < 2 {
+		t.Skip("not enough chunks to test duplication")
+	}
+	for i := 1; i < len(chunks); i++ {
+		if chunks[i] == chunks[i-1] {
+			t.Errorf("chunk[%d] and chunk[%d] are identical: %q", i-1, i, chunks[i])
+		}
+	}
+}
+
+func TestSplitSentences_Basic(t *testing.T) {
+	text := "Первое предложение. Второе предложение! Третье?\nЧетвёртое."
+	sents := splitSentences(text)
+	if len(sents) < 3 {
+		t.Errorf("expected ≥ 3 sentences, got %d: %v", len(sents), sents)
+	}
+	for _, s := range sents {
+		if strings.TrimSpace(s) == "" {
+			t.Errorf("empty sentence in result: %v", sents)
+		}
+	}
+}

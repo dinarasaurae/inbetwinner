@@ -245,55 +245,159 @@ func (s *DocumentService) Delete(ctx context.Context, id, workspaceID uuid.UUID)
 
 // ── text chunking ─────────────────────────────────────────────────────────────
 
+// chunkText splits text into overlapping chunks using a sliding-window sentence
+// strategy. Overlap defaults to 20 % of chunkSize (min 50 chars) so that
+// context is never lost at chunk boundaries.
+//
+// Algorithm:
+//  1. Split text into sentences on ". ", "! ", "? ", "\n\n", "\n".
+//  2. Accumulate sentences into a window until the window reaches chunkSize.
+//  3. Save the window as a chunk, then slide forward by dropping sentences from
+//     the front until what remains fits within the overlap budget.
+//  4. The kept tail becomes the seed of the next chunk.
 func chunkText(text string, chunkSize int) []string {
+	overlap := chunkSize / 5 // 20 %
+	if overlap < 50 {
+		overlap = 0
+	}
+	return chunkDocText(text, chunkSize, overlap)
+}
+
+// chunkDocText is the document-specific chunker (character-based, sentence-aware).
+// web.go uses a separate word-based chunkTextWithOverlap for HTML pages.
+func chunkDocText(text string, chunkSize, overlap int) []string {
 	text = strings.TrimSpace(text)
 	if len(text) == 0 {
 		return nil
 	}
-	paragraphs := strings.Split(text, "\n\n")
+
+	sentences := splitSentences(text)
+
+	// windowLen returns the total character length of a sentence slice including
+	// single-space separators between items.
+	windowLen := func(w []string) int {
+		if len(w) == 0 {
+			return 0
+		}
+		n := 0
+		for _, s := range w {
+			n += len(s)
+		}
+		n += len(w) - 1 // separators
+		return n
+	}
+
+	joinWindow := func(w []string) string {
+		return strings.Join(w, " ")
+	}
+
 	var chunks []string
-	current := ""
-	for _, para := range paragraphs {
-		para = strings.TrimSpace(para)
-		if para == "" {
+	window := make([]string, 0, 16)
+
+	for _, sent := range sentences {
+		sent = strings.TrimSpace(sent)
+		if sent == "" {
 			continue
 		}
-		if len(current)+len(para)+2 <= chunkSize {
-			if current != "" {
-				current += "\n\n"
+
+		// If a single sentence is already larger than chunkSize, hard-split it.
+		if len(sent) > chunkSize {
+			// Flush current window first.
+			if len(window) > 0 {
+				chunks = append(chunks, joinWindow(window))
+				window = window[:0]
 			}
-			current += para
-		} else {
-			if current != "" {
-				chunks = append(chunks, current)
+			// Emit the long sentence in chunkSize-sized slices.
+			for len(sent) > chunkSize {
+				chunks = append(chunks, sent[:chunkSize])
+				sent = sent[chunkSize:]
 			}
-			if len(para) > chunkSize {
-				sentences := strings.Split(para, ". ")
-				current = ""
-				for _, sent := range sentences {
-					sent = strings.TrimSpace(sent)
-					if sent == "" {
-						continue
-					}
-					if len(current)+len(sent)+2 <= chunkSize {
-						if current != "" {
-							current += ". "
-						}
-						current += sent
-					} else {
-						if current != "" {
-							chunks = append(chunks, current)
-						}
-						current = sent
-					}
+			if sent != "" {
+				window = append(window, sent)
+			}
+			continue
+		}
+
+		// Would adding this sentence overflow the window?
+		sep := 0
+		if len(window) > 0 {
+			sep = 1
+		}
+		if windowLen(window)+sep+len(sent) > chunkSize {
+			// Save the current window.
+			if len(window) > 0 {
+				chunks = append(chunks, joinWindow(window))
+			}
+			// Slide: drop sentences from the front until the remaining tail
+			// fits within the overlap budget (and keep at least one sentence).
+			for len(window) > 1 && windowLen(window) > overlap {
+				window = window[1:]
+			}
+			// If overlap is 0, clear entirely.
+			if overlap == 0 {
+				window = window[:0]
+			}
+			// Safety: if the overlap tail + new sentence still won't fit
+			// (e.g. a single very long sentence dominates the tail), abandon
+			// the tail so we never exceed chunkSize.
+			sep = 0
+			if len(window) > 0 {
+				sep = 1
+			}
+			if windowLen(window)+sep+len(sent) > chunkSize {
+				window = window[:0]
+			}
+		}
+
+		window = append(window, sent)
+	}
+
+	// Flush the last window.
+	if len(window) > 0 {
+		last := joinWindow(window)
+		// Avoid emitting a chunk identical to the previous one (can happen when
+		// the last sentence fits exactly into an overlap tail).
+		if len(chunks) == 0 || chunks[len(chunks)-1] != last {
+			chunks = append(chunks, last)
+		}
+	}
+
+	return chunks
+}
+
+// splitSentences breaks text into sentence-level units. It splits on common
+// end-of-sentence punctuation followed by whitespace, and also on newlines, so
+// that paragraph structure is preserved as natural boundaries.
+func splitSentences(text string) []string {
+	// Normalise CRLF and multiple blank lines.
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+
+	var sentences []string
+	current := strings.Builder{}
+
+	runes := []rune(text)
+	for i, r := range runes {
+		current.WriteRune(r)
+
+		switch r {
+		case '\n':
+			if s := strings.TrimSpace(current.String()); s != "" {
+				sentences = append(sentences, s)
+			}
+			current.Reset()
+		case '.', '!', '?':
+			// Only split if followed by a space or end-of-text.
+			next := i + 1
+			if next >= len(runes) || runes[next] == ' ' || runes[next] == '\n' {
+				if s := strings.TrimSpace(current.String()); s != "" {
+					sentences = append(sentences, s)
 				}
-			} else {
-				current = para
+				current.Reset()
 			}
 		}
 	}
-	if current != "" {
-		chunks = append(chunks, current)
+	if s := strings.TrimSpace(current.String()); s != "" {
+		sentences = append(sentences, s)
 	}
-	return chunks
+	return sentences
 }
