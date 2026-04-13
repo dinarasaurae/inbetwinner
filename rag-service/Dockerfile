@@ -12,7 +12,9 @@ COPY rag-service/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /rag-service ./cmd/server
 
 FROM alpine:3.19
-RUN apk --no-cache add ca-certificates curl tzdata
+# poppler-utils provides pdftotext — handles CID fonts, Cyrillic, complex PDF layouts.
+# Without it the service falls back to a basic pure-Go extractor (lower quality).
+RUN apk --no-cache add ca-certificates curl tzdata poppler-utils
 WORKDIR /app
 COPY --from=builder /rag-service .
 EXPOSE 3004
