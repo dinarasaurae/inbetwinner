@@ -469,6 +469,97 @@ type SocialMsgContext struct {
 	EscalationPolicy  string   `json:"escalation_policy,omitempty"`
 	AutoReplyEnabled  bool     `json:"auto_reply_enabled"`
 	BusinessSnapshot  string   `json:"business_snapshot,omitempty"`
+	// DigitalTwin is the enriched lead profile sent from social-service.
+	// When present it is injected into the system prompt so the agent can
+	// address the user by name, reference their city, occupation, or
+	// Pinterest interests.
+	DigitalTwin *DigitalTwinContext `json:"digital_twin,omitempty"`
+}
+
+// DigitalTwinContext mirrors social-service's DigitalTwin struct.
+// Kept as a flat struct (no import cycle) — serialised over the wire.
+type DigitalTwinContext struct {
+	FirstName       string   `json:"first_name,omitempty"`
+	LastName        string   `json:"last_name,omitempty"`
+	City            string   `json:"city,omitempty"`
+	Country         string   `json:"country,omitempty"`
+	Company         string   `json:"company,omitempty"`
+	JobTitle        string   `json:"job_title,omitempty"`
+	Bio             string   `json:"bio,omitempty"`
+	Status          string   `json:"status,omitempty"`
+	FollowersCount  int      `json:"followers_count,omitempty"`
+	PinterestURL    string   `json:"pinterest_url,omitempty"`
+	PinterestBoards []string `json:"pinterest_boards,omitempty"`
+	FacebookName    string   `json:"facebook_name,omitempty"`
+	LeadScore       int      `json:"lead_score,omitempty"`
+}
+
+// summaryForLLM formats the twin as a compact profile block for the system prompt.
+func (d *DigitalTwinContext) summaryForLLM() string {
+	if d == nil {
+		return ""
+	}
+	var lines []string
+
+	if name := strings.TrimSpace(d.FirstName + " " + d.LastName); name != "" {
+		lines = append(lines, "Имя: "+name)
+	}
+	var locParts []string
+	if d.City != "" {
+		locParts = append(locParts, d.City)
+	}
+	if d.Country != "" {
+		locParts = append(locParts, d.Country)
+	}
+	if len(locParts) > 0 {
+		lines = append(lines, "Местоположение: "+strings.Join(locParts, ", "))
+	}
+	if d.Company != "" || d.JobTitle != "" {
+		occ := d.JobTitle
+		if d.Company != "" {
+			if occ != "" {
+				occ += " в " + d.Company
+			} else {
+				occ = d.Company
+			}
+		}
+		lines = append(lines, "Работа: "+occ)
+	}
+	if d.Bio != "" {
+		bio := d.Bio
+		if len(bio) > 200 {
+			bio = bio[:197] + "..."
+		}
+		lines = append(lines, "О себе: "+bio)
+	}
+	if d.Status != "" {
+		lines = append(lines, "Статус: \""+d.Status+"\"")
+	}
+	if d.FollowersCount > 0 {
+		lines = append(lines, fmt.Sprintf("Подписчиков: %d", d.FollowersCount))
+	}
+	if len(d.PinterestBoards) > 0 {
+		boards := d.PinterestBoards
+		if len(boards) > 6 {
+			boards = boards[:6]
+		}
+		lines = append(lines, "Pinterest интересы: "+strings.Join(boards, ", "))
+	} else if d.PinterestURL != "" {
+		lines = append(lines, "Pinterest: "+d.PinterestURL)
+	}
+	if d.FacebookName != "" {
+		lines = append(lines, "Facebook: "+d.FacebookName)
+	}
+	if d.LeadScore > 0 {
+		lines = append(lines, fmt.Sprintf("Оценка лида: %d/100", d.LeadScore))
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+	return "--- Профиль клиента ---\n" +
+		strings.Join(lines, "\n") +
+		"\n--- Конец профиля ---"
 }
 
 // VKOrchestrationDecision is the structured response returned to social-service.
@@ -712,19 +803,29 @@ func (s *LLMService) processSocialMessageJSONFallback(
 
 func (s *LLMService) buildVKSystemPromptWithMemory(agentBase string, ctx *SocialMsgContext, ragContext, platform, chatUserID string) string {
 	base := s.buildVKSystemPrompt(agentBase, ctx, ragContext)
-	if platform == "" && chatUserID == "" {
-		return base
-	}
 	sb := strings.Builder{}
 	sb.WriteString(base)
-	sb.WriteString("\n\n--- Контекст диалога ---")
-	if platform != "" {
-		sb.WriteString("\nПлатформа: " + platform)
+
+	// Inject digital twin profile — highest-value personalisation signal.
+	var twin *DigitalTwinContext
+	if ctx != nil {
+		twin = ctx.DigitalTwin
 	}
-	if chatUserID != "" {
-		sb.WriteString("\nID пользователя: " + chatUserID)
+	if twinSummary := twin.summaryForLLM(); twinSummary != "" {
+		sb.WriteString("\n\n" + twinSummary)
 	}
-	sb.WriteString("\n--- Конец контекста ---")
+
+	// Append lightweight session context (platform + user ID).
+	if platform != "" || chatUserID != "" {
+		sb.WriteString("\n\n--- Контекст сессии ---")
+		if platform != "" {
+			sb.WriteString("\nПлатформа: " + platform)
+		}
+		if chatUserID != "" {
+			sb.WriteString("\nID пользователя: " + chatUserID)
+		}
+		sb.WriteString("\n--- Конец контекста ---")
+	}
 	return sb.String()
 }
 

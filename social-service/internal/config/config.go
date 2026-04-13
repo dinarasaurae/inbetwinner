@@ -91,6 +91,16 @@ type Config struct {
 	//   llm_service — route through llm-service orchestrator only
 	//   hybrid      — try llm-service first; fall back to legacy on error/timeout
 	LLMOrchestrationMode string
+
+	// Pinterest Business API access token — used to enrich leads' public
+	// Pinterest profile (board names → interests) for the digital twin.
+	// Obtain at: https://developers.pinterest.com/docs/getting-started/authentication/
+	PinterestAccessToken string
+
+	// Facebook Page Access Token — used for Graph API Messenger profile lookups.
+	// Required only when Facebook Messenger integration is active.
+	// Obtain at: https://developers.facebook.com/docs/messenger-platform/
+	FacebookPageToken string
 }
 
 // VKPlatform returns the VK credentials for the given platform ("web", "android", "ios").
@@ -225,6 +235,8 @@ func Load() *Config {
 		LLMServiceURL:        getEnv("LLM_SERVICE_URL", "http://llm-service:3005"),
 		AuthServiceURL:       getEnv("AUTH_SERVICE_URL", "http://auth-service:3001"),
 		LLMOrchestrationMode: getEnv("LLM_ORCHESTRATION_MODE", "legacy"),
+		PinterestAccessToken: getEnv("PINTEREST_ACCESS_TOKEN", ""),
+		FacebookPageToken:    getEnv("FACEBOOK_PAGE_TOKEN", ""),
 	}
 }
 

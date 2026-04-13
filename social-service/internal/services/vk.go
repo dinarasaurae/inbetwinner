@@ -45,9 +45,10 @@ type VKService struct {
 	db            *database.DB
 	enc           *crypto.Encryptor
 	cfg           *config.Config
-	llmClient     *VKLLMClient       // nil when LLM_SERVICE_URL is not configured
+	llmClient     *VKLLMClient            // nil when LLM_SERVICE_URL is not configured
 	draftProvider ChatCompletionProvider
 	pushClient    *PushNotificationClient // nil when AUTH_SERVICE_URL is not configured
+	twinSvc       *DigitalTwinService     // nil when not configured
 
 	// oauthStates stores short-lived CSRF nonces for all OAuth flows.
 	oauthMu     sync.Mutex
@@ -65,6 +66,18 @@ func NewVKService(db *database.DB, enc *crypto.Encryptor, cfg *config.Config) *V
 	if cfg.LLMServiceURL != "" {
 		llmClient = NewVKLLMClient(cfg.LLMServiceURL)
 	}
+
+	// Digital twin service — Pinterest and Facebook clients are optional.
+	var pinterestClient *PinterestClient
+	if cfg.PinterestAccessToken != "" {
+		pinterestClient = NewPinterestClient(cfg.PinterestAccessToken)
+	}
+	var facebookClient *FacebookClient
+	if cfg.FacebookPageToken != "" {
+		facebookClient = NewFacebookClient(cfg.FacebookPageToken)
+	}
+	twinSvc := NewDigitalTwinService(db, pinterestClient, facebookClient)
+
 	svc := &VKService{
 		db:            db,
 		enc:           enc,
@@ -72,6 +85,7 @@ func NewVKService(db *database.DB, enc *crypto.Encryptor, cfg *config.Config) *V
 		llmClient:     llmClient,
 		draftProvider: NewChatCompletionProvider(cfg),
 		pushClient:    NewPushNotificationClient(cfg.AuthServiceURL),
+		twinSvc:       twinSvc,
 		oauthStates:   make(map[string]pendingOAuth),
 		workerCancels: make(map[uuid.UUID]context.CancelFunc),
 	}
@@ -915,7 +929,24 @@ func (s *VKService) EnrichLead(ctx context.Context, userID uuid.UUID, integratio
 		nullStr(profile.OccupationType), nullStr(profile.OccupationName),
 		profile.LastEnrichedAt,
 	)
-	return profile, err
+	if err != nil {
+		return profile, err
+	}
+
+	// Mirror enriched data into the unified digital_twins table so the LLM
+	// can access the profile in a platform-agnostic way.
+	if s.twinSvc != nil {
+		chatUserID := fmt.Sprintf("%d", vkUserID)
+		s.twinSvc.UpsertFromVKProfile(ctx, userID, chatUserID,
+			profile.FirstName, profile.LastName,
+			profile.City, profile.Country,
+			profile.About, profile.Status,
+			profile.OccupationType, profile.OccupationName,
+			profile.FollowersCount,
+		)
+	}
+
+	return profile, nil
 }
 
 // ─── Long Poll worker management ──────────────────────────────────────────────
