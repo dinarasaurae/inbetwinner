@@ -239,9 +239,18 @@ func (s *VKService) processInboundMessageLLM(ctx context.Context, userID, integr
 		snapshotSummary = workspace.BusinessSnapshot.Summary
 	}
 
+	// Fetch the lead's digital twin (name, city, occupation, Pinterest interests…).
+	// Non-blocking: if the twin service isn't wired or the profile not yet enriched,
+	// twin will be nil and the LLM falls back to anonymous mode.
+	chatUserID := fmt.Sprintf("%d", inbound.FromVKUserID)
+	var twin *DigitalTwin
+	if s.twinSvc != nil {
+		twin = s.twinSvc.GetOrBuild(ctx, userID, "vk", chatUserID)
+	}
+
 	req := VKProcessRequest{
 		IntegrationID: integrationID.String(),
-		ChatUserID:    fmt.Sprintf("%d", inbound.FromVKUserID),
+		ChatUserID:    chatUserID,
 		Platform:      "vk",
 		Message:       inbound.Text,
 		Context: &VKProcessContext{
@@ -251,6 +260,7 @@ func (s *VKService) processInboundMessageLLM(ctx context.Context, userID, integr
 			EscalationPolicy:  settings.EscalationPolicy,
 			AutoReplyEnabled:  settings.AutoReplyEnabled,
 			BusinessSnapshot:  snapshotSummary,
+			DigitalTwin:       twin,
 		},
 	}
 

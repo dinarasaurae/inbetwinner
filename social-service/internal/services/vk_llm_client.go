@@ -22,6 +22,10 @@ type VKProcessContext struct {
 	EscalationPolicy  string   `json:"escalation_policy,omitempty"`
 	AutoReplyEnabled  bool     `json:"auto_reply_enabled"`
 	BusinessSnapshot  string   `json:"business_snapshot,omitempty"`
+	// DigitalTwin is the enriched lead profile: name, city, occupation,
+	// Pinterest interests, etc. Injected into the agent system prompt so
+	// the LLM can personalise every response.
+	DigitalTwin *DigitalTwin `json:"digital_twin,omitempty"`
 }
 
 // VKProcessRequest is the payload posted to /llm/social/vk/process.
