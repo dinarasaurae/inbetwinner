@@ -68,6 +68,21 @@ func main() {
 	}
 
 	mtprotoSvc := mtproto.NewService(db, enc, cfg)
+
+	// Wire Telegram DM userbot: incoming DMs → AI pipeline → reply as real user.
+	tgUserbotSvc := services.NewTGUserbotService(db, cfg, mtprotoSvc.SendDM)
+	mtprotoSvc.SetDMHandler(tgUserbotSvc.AsDMHandler())
+
+	// Start persistent MTProto listeners for every authenticated session.
+	// Each user gets one long-lived goroutine that reconnects on error.
+	if cfg.TelegramAppID != 0 {
+		go func() {
+			if err := mtprotoSvc.Listener.StartAll(context.Background()); err != nil {
+				log.Printf("WARNING: mtproto StartAll: %v", err)
+			}
+		}()
+	}
+
 	mtprotoHandler := handlers.NewMtprotoHandler(mtprotoSvc)
 
 	healthHandler := handlers.NewHealthHandler(db)

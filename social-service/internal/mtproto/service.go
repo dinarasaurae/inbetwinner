@@ -47,17 +47,33 @@ type Channel struct {
 
 // Service is the MTProto service — it acts as the authenticated user.
 type Service struct {
-	cfg     *config.Config
-	store   *sessionStore
-	manager *authManager
+	cfg      *config.Config
+	store    *sessionStore
+	manager  *authManager
+	Listener *ListenerManager // exported so main.go can call StartAll + pass handler
 }
 
 func NewService(db *database.DB, enc *crypto.Encryptor, cfg *config.Config) *Service {
-	return &Service{
+	store := newSessionStore(db, enc)
+	svc := &Service{
 		cfg:     cfg,
-		store:   newSessionStore(db, enc),
+		store:   store,
 		manager: newAuthManager(),
 	}
+	// Listener is set after the DM handler is wired (see SetDMHandler).
+	svc.Listener = NewListenerManager(store, cfg.TelegramAppID, cfg.TelegramAppHash, nil)
+	return svc
+}
+
+// SetDMHandler registers the handler for incoming private messages and
+// (re)creates the ListenerManager with it. Must be called before StartAll.
+func (s *Service) SetDMHandler(h DMHandler) {
+	s.Listener = NewListenerManager(s.store, s.cfg.TelegramAppID, s.cfg.TelegramAppHash, h)
+}
+
+// SendDM sends a text DM to a Telegram user as the authenticated workspace owner.
+func (s *Service) SendDM(ctx context.Context, workspaceID uuid.UUID, peerUserID, peerAccessHash int64, text string) error {
+	return s.Listener.SendDM(ctx, workspaceID, peerUserID, peerAccessHash, text)
 }
 
 // ── Authentication ────────────────────────────────────────────────────────────
@@ -189,6 +205,8 @@ func (s *Service) SignIn(ctx context.Context, userID uuid.UUID, code string) (*T
 		if result.Err != nil {
 			return nil, result.Err
 		}
+		// Start a persistent listener for this user so incoming DMs are received.
+		s.Listener.Start(context.Background(), userID)
 		return &TelegramUser{
 			TgUserID:    result.TgUserID,
 			TgUsername:  result.TgUsername,
@@ -202,6 +220,9 @@ func (s *Service) SignIn(ctx context.Context, userID uuid.UUID, code string) (*T
 
 // SignOut revokes the session on Telegram's side and deletes it from the database.
 func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
+	// Stop the persistent listener before closing the session.
+	s.Listener.Stop(userID)
+
 	err := s.run(ctx, userID, func(runCtx context.Context, client *telegram.Client) error {
 		_, logoutErr := client.API().AuthLogOut(runCtx)
 		return logoutErr
