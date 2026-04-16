@@ -144,6 +144,7 @@ func main() {
 	tgAuth.Post("/sign-in", mtprotoHandler.SignIn)
 	tgAuth.Delete("/sign-out", mtprotoHandler.SignOut)
 
+	tg.Get("/userbot/status", mtprotoHandler.UserbotStatus)
 	tg.Get("/channels", mtprotoHandler.GetChannels)
 	tg.Post("/sync", mtprotoHandler.Sync)
 	tg.Post("/message", mtprotoHandler.SendMessage)

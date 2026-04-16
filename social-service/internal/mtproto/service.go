@@ -65,6 +65,12 @@ func NewService(db *database.DB, enc *crypto.Encryptor, cfg *config.Config) *Ser
 	return svc
 }
 
+// GetUserbotStatus returns Telegram display info if the user has an active session.
+func (s *Service) GetUserbotStatus(ctx context.Context, userID uuid.UUID) (tgUsername, tgFirstName, tgLastName string, connected bool) {
+	tgUsername, tgFirstName, tgLastName, connected = s.store.LoadMeta(ctx, userID)
+	return
+}
+
 // SetDMHandler registers the handler for incoming private messages and
 // (re)creates the ListenerManager with it. Must be called before StartAll.
 func (s *Service) SetDMHandler(h DMHandler) {

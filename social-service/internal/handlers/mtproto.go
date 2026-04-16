@@ -213,6 +213,23 @@ func (h *MtprotoHandler) ReplyToComment(c fiber.Ctx) error {
 	}))
 }
 
+// UserbotStatus handles GET /social/telegram/userbot/status
+// Returns whether the current user has an active MTProto session.
+func (h *MtprotoHandler) UserbotStatus(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthenticated", nil))
+	}
+
+	tgUsername, tgFirstName, tgLastName, connected := h.svc.GetUserbotStatus(c.Context(), userID)
+	return c.JSON(jwtlib.NewSuccessResponse("", fiber.Map{
+		"connected":    connected,
+		"tg_username":  tgUsername,
+		"tg_first_name": tgFirstName,
+		"tg_last_name":  tgLastName,
+	}))
+}
+
 // mapMtprotoError converts MTProto service errors to HTTP responses.
 func mapMtprotoError(c fiber.Ctx, err error) error {
 	switch {
