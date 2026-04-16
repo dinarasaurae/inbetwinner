@@ -243,6 +243,90 @@ func (s *DocumentService) Delete(ctx context.Context, id, workspaceID uuid.UUID)
 	return err
 }
 
+// Reindex re-embeds and re-upserts to Pinecone a document that is in "pending"
+// status (i.e. a previous embedding attempt failed). The content and chunks
+// already exist in Postgres — we only redo the vector part.
+func (s *DocumentService) Reindex(ctx context.Context, id, workspaceID uuid.UUID) (*models.KnowledgeDocument, error) {
+	// Load the document; verifies ownership.
+	doc, err := s.GetByID(ctx, id, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("document not found: %w", err)
+	}
+
+	ns, err := s.nsSvc.GetByID(ctx, doc.NamespaceID, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("namespace not found: %w", err)
+	}
+
+	// Fetch existing chunks from Postgres.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT chunk_index, text, pinecone_id FROM knowledge_chunks
+		 WHERE document_id=$1 ORDER BY chunk_index`,
+		id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load chunks: %w", err)
+	}
+	defer rows.Close()
+
+	type chunkRow struct {
+		idx        int
+		text       string
+		pineconeID string
+	}
+	var chunks []chunkRow
+	for rows.Next() {
+		var r chunkRow
+		if err := rows.Scan(&r.idx, &r.text, &r.pineconeID); err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("no chunks found for document — delete and re-upload")
+	}
+
+	texts := make([]string, len(chunks))
+	for i, c := range chunks {
+		texts[i] = c.text
+	}
+
+	embeddings, embedErr := s.embedding.EmbedBatch(ctx, texts)
+	if embedErr != nil {
+		return nil, fmt.Errorf("embedding failed: %w", embedErr)
+	}
+
+	if s.pinecone != nil {
+		var vectors []VectorRecord
+		for i, c := range chunks {
+			vectors = append(vectors, VectorRecord{
+				ID:     c.pineconeID,
+				Values: embeddings[i],
+				Metadata: map[string]interface{}{
+					"workspace_id": workspaceID.String(),
+					"document_id":  id.String(),
+					"chunk_index":  float64(c.idx),
+					"text":         c.text,
+					"source":       "doc",
+					"filename":     doc.Filename,
+				},
+			})
+		}
+		if err := s.pinecone.UpsertVectors(ctx, ns.PineconeNS, vectors); err != nil {
+			return nil, fmt.Errorf("pinecone upsert: %w", err)
+		}
+	}
+
+	_, _ = s.db.ExecContext(ctx,
+		`UPDATE knowledge_documents SET status='indexed', updated_at=NOW() WHERE id=$1`,
+		id,
+	)
+	return s.GetByID(ctx, id, workspaceID)
+}
+
 // ── text chunking ─────────────────────────────────────────────────────────────
 
 // chunkText splits text into overlapping chunks using a sliding-window sentence

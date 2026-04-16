@@ -116,6 +116,7 @@ func main() {
 	rag.Post("/documents/upload", docH.Upload)
 	rag.Get("/documents", docH.List)
 	rag.Delete("/documents/:id", docH.Delete)
+	rag.Post("/documents/:id/reindex", docH.Reindex)
 
 	// ── QA pairs ─────────────────────────────────────────────────────────────
 	rag.Post("/qa", qaH.Create)

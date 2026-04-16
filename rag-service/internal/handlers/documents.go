@@ -119,3 +119,18 @@ func (h *DocumentHandler) Delete(c fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"message": "deleted"})
 }
+
+// Reindex handles POST /rag/documents/:id/reindex
+// Re-embeds chunks and upserts them to Pinecone for a document stuck in "pending".
+func (h *DocumentHandler) Reindex(c fiber.Ctx) error {
+	wid := c.Locals("workspaceID").(uuid.UUID)
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid id"})
+	}
+	doc, err := h.svc.Reindex(c.Context(), id, wid)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(doc)
+}
