@@ -13,7 +13,7 @@ import (
 
 type DocumentService struct {
 	db         *database.DB
-	embedding  *EmbeddingService
+	embedding  Embedder
 	pinecone   *PineconeService
 	nsSvc      *NamespaceService
 	storage    *StorageService
@@ -22,7 +22,7 @@ type DocumentService struct {
 
 func NewDocumentService(
 	db *database.DB,
-	emb *EmbeddingService,
+	emb Embedder,
 	pc *PineconeService,
 	ns *NamespaceService,
 	storage *StorageService,

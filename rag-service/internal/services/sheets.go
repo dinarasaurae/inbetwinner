@@ -35,13 +35,13 @@ const (
 
 type SheetsService struct {
 	db          *database.DB
-	embedding   *EmbeddingService
+	embedding   Embedder
 	pinecone    *PineconeService
 	nsSvc       *NamespaceService
 	googleOAuth *GoogleOAuthService
 }
 
-func NewSheetsService(db *database.DB, emb *EmbeddingService, pc *PineconeService, ns *NamespaceService, googleOAuth *GoogleOAuthService) *SheetsService {
+func NewSheetsService(db *database.DB, emb Embedder, pc *PineconeService, ns *NamespaceService, googleOAuth *GoogleOAuthService) *SheetsService {
 	return &SheetsService{db: db, embedding: emb, pinecone: pc, nsSvc: ns, googleOAuth: googleOAuth}
 }
 

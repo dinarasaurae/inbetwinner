@@ -19,6 +19,12 @@ type Config struct {
 	DBName     string
 	DBSSLMode  string
 
+	// Embedding provider: "cohere" or "" (OpenAI default)
+	EmbeddingProvider string
+	// Cohere
+	CohereAPIKey         string
+	CohereEmbeddingModel string
+	// OpenAI (fallback)
 	OpenAIAPIKey         string
 	OpenAIEmbeddingModel string
 	OpenAIEmbeddingDims  int
@@ -63,6 +69,9 @@ func Load() *Config {
 		DBName:      getEnv("DB_NAME", "rag_db"),
 		DBSSLMode:   getEnv("DB_SSL_MODE", "disable"),
 
+		EmbeddingProvider:    getEnv("EMBEDDING_PROVIDER", ""),
+		CohereAPIKey:         getEnv("COHERE_API_KEY", ""),
+		CohereEmbeddingModel: getEnv("COHERE_EMBEDDING_MODEL", "embed-multilingual-v3.0"),
 		OpenAIAPIKey:         getEnv("OPENAI_API_KEY", ""),
 		OpenAIEmbeddingModel: getEnv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
 		OpenAIEmbeddingDims:  dims,
