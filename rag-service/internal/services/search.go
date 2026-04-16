@@ -12,7 +12,7 @@ import (
 
 type SearchService struct {
 	db        *database.DB
-	embedding *EmbeddingService
+	embedding Embedder
 	pinecone  *PineconeService
 	nsSvc     *NamespaceService
 }
@@ -111,7 +111,7 @@ func buildORQuery(query string) string {
 	return strings.Join(quotedTerms, " | ")
 }
 
-func NewSearchService(db *database.DB, emb *EmbeddingService, pc *PineconeService, ns *NamespaceService) *SearchService {
+func NewSearchService(db *database.DB, emb Embedder, pc *PineconeService, ns *NamespaceService) *SearchService {
 	return &SearchService{db: db, embedding: emb, pinecone: pc, nsSvc: ns}
 }
 
@@ -132,7 +132,7 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 	vectorOrder := []string{}
 
 	// --- Vector search (Pinecone) — non-fatal ---
-	queryVec, embedErr := s.embedding.EmbedText(ctx, req.Query)
+	queryVec, embedErr := s.embedding.EmbedQuery(ctx, req.Query)
 	if embedErr != nil {
 		log.Printf("[search] embed query failed (skipping vector search): %v", embedErr)
 	} else if s.pinecone != nil {

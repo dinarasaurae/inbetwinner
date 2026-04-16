@@ -33,7 +33,18 @@ func main() {
 		log.Fatalf("Migrations: %v", err)
 	}
 
-	embSvc := services.NewEmbeddingService(cfg.OpenAIAPIKey, cfg.OpenAIEmbeddingModel)
+	// Select embedding backend: Cohere if EMBEDDING_PROVIDER=cohere, else OpenAI.
+	var embAPIKey, embModel string
+	if cfg.EmbeddingProvider == "cohere" {
+		embAPIKey = cfg.CohereAPIKey
+		embModel = cfg.CohereEmbeddingModel
+		log.Printf("Embedding provider: Cohere (%s)", embModel)
+	} else {
+		embAPIKey = cfg.OpenAIAPIKey
+		embModel = cfg.OpenAIEmbeddingModel
+		log.Printf("Embedding provider: OpenAI (%s)", embModel)
+	}
+	embSvc := services.NewEmbedder(cfg.EmbeddingProvider, embAPIKey, embModel)
 
 	var pcSvc *services.PineconeService
 	if cfg.PineconeAPIKey != "" && cfg.PineconeHost != "" {

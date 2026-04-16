@@ -13,12 +13,12 @@ import (
 
 type QAService struct {
 	db        *database.DB
-	embedding *EmbeddingService
+	embedding Embedder
 	pinecone  *PineconeService
 	nsSvc     *NamespaceService
 }
 
-func NewQAService(db *database.DB, emb *EmbeddingService, pc *PineconeService, ns *NamespaceService) *QAService {
+func NewQAService(db *database.DB, emb Embedder, pc *PineconeService, ns *NamespaceService) *QAService {
 	return &QAService{db: db, embedding: emb, pinecone: pc, nsSvc: ns}
 }
 
@@ -29,7 +29,12 @@ func (s *QAService) Create(ctx context.Context, workspaceID uuid.UUID, req model
 	}
 	tagsJSON, _ := json.Marshal(req.Tags)
 	// Attempt embedding — non-fatal, record is still saved for BM25 search
-	vec, embedErr := s.embedding.EmbedText(ctx, req.Question)
+	// QA questions are indexed as documents (search_document input_type for Cohere).
+	vecs, embedErr := s.embedding.EmbedBatch(ctx, []string{req.Question})
+	var vec []float32
+	if embedErr == nil {
+		vec = vecs[0]
+	}
 
 	qa := &models.QAPair{}
 	err = s.db.QueryRowContext(ctx, `

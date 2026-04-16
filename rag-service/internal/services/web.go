@@ -18,12 +18,12 @@ import (
 
 type WebService struct {
 	db        *database.DB
-	embedding *EmbeddingService
+	embedding Embedder
 	pinecone  *PineconeService
 	nsSvc     *NamespaceService
 }
 
-func NewWebService(db *database.DB, emb *EmbeddingService, pc *PineconeService, ns *NamespaceService) *WebService {
+func NewWebService(db *database.DB, emb Embedder, pc *PineconeService, ns *NamespaceService) *WebService {
 	return &WebService{db: db, embedding: emb, pinecone: pc, nsSvc: ns}
 }
 
