@@ -66,6 +66,29 @@ func newSessionStore(db *database.DB, enc *crypto.Encryptor) *sessionStore {
 	return &sessionStore{db: db, enc: enc}
 }
 
+// LoadMeta returns display fields from the session row without decrypting.
+func (s *sessionStore) LoadMeta(ctx context.Context, userID uuid.UUID) (tgUsername, tgFirstName, tgLastName string, ok bool) {
+	var u, fn, ln *string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT tg_username, tg_first_name, tg_last_name FROM telegram_sessions
+		 WHERE user_id = $1 AND revoked_at IS NULL`,
+		userID,
+	).Scan(&u, &fn, &ln)
+	if err != nil {
+		return "", "", "", false
+	}
+	if u != nil {
+		tgUsername = *u
+	}
+	if fn != nil {
+		tgFirstName = *fn
+	}
+	if ln != nil {
+		tgLastName = *ln
+	}
+	return tgUsername, tgFirstName, tgLastName, true
+}
+
 // Load decrypts and returns the session bytes for a user.
 // Returns errNoSession if no row exists.
 func (s *sessionStore) Load(ctx context.Context, userID uuid.UUID) ([]byte, error) {
