@@ -71,7 +71,7 @@ func Load() *Config {
 
 		EmbeddingProvider:    getEnv("EMBEDDING_PROVIDER", ""),
 		CohereAPIKey:         getEnv("COHERE_API_KEY", ""),
-		CohereEmbeddingModel: getEnv("COHERE_EMBEDDING_MODEL", "embed-multilingual-v3.0"),
+		CohereEmbeddingModel: getEnv("COHERE_EMBEDDING_MODEL", "embed-v4.0"),
 		OpenAIAPIKey:         getEnv("OPENAI_API_KEY", ""),
 		OpenAIEmbeddingModel: getEnv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
 		OpenAIEmbeddingDims:  dims,
