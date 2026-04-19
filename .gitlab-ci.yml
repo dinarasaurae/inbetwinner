@@ -33,7 +33,7 @@ variables:
     - docker push "${IMAGE_PREFIX}/${SERVICE}:${CI_COMMIT_SHORT_SHA}"
     - docker push "${IMAGE_PREFIX}/${SERVICE}:latest"
   rules:
-    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "feat/agent-pipeline"
     - if: $CI_PIPELINE_SOURCE == "web"
 
 # ─── Per-service build jobs ───────────────────────────────────────────────────
@@ -125,7 +125,7 @@ deploy:production:
           echo "✓ Deploy complete — $(date)"
       REMOTE
   rules:
-    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "feat/agent-pipeline"
     - if: $CI_PIPELINE_SOURCE == "web"
   needs:
     - build:auth-service
