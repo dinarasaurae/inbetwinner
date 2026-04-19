@@ -63,7 +63,7 @@ chown "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_DIR"
 
 if [[ ! -d "$DEPLOY_DIR/.git" ]]; then
   echo "→ Cloning repository..."
-  sudo -u "$DEPLOY_USER" git clone https://gitlab.com/khdinova/inbetwinner.git "$DEPLOY_DIR"
+  sudo -u "$DEPLOY_USER" git clone -b feat/agent-pipeline https://gitlab.com/khdinova/inbetwinner.git "$DEPLOY_DIR"
 fi
 
 mkdir -p "$DEPLOY_DIR/secrets"
