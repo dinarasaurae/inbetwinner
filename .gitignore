@@ -19,6 +19,7 @@ docker-compose.override.yml
 
 # Environment & Secrets
 .env*
+!.env.*.example
 config/secrets.*
 **/*secret*
 **/*key*
@@ -55,6 +56,8 @@ logs/
 ._*
 Thumbs.db
 *~
+
+SMOKE_TEST.md
 
 # Test coverage
 coverage.*

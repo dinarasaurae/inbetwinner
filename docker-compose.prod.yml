@@ -1,0 +1,427 @@
+# Run on the server:  docker compose -f docker-compose.prod.yml up -d
+
+x-image-prefix: &image-prefix ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}
+x-image-tag: &image-tag ${IMAGE_TAG:-latest}
+
+services:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Infrastructure
+  # ──────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: inbetwin-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-auth_db}
+      SOCIAL_DB_USER: ${SOCIAL_DB_USER}
+      SOCIAL_DB_PASSWORD: ${SOCIAL_DB_PASSWORD}
+      SOCIAL_DB_NAME: ${SOCIAL_DB_NAME:-social_db}
+      RAG_DB_USER: ${RAG_DB_USER}
+      RAG_DB_PASSWORD: ${RAG_DB_PASSWORD}
+      RAG_DB_NAME: ${RAG_DB_NAME:-rag_db}
+      LLM_DB_USER: ${LLM_DB_USER}
+      LLM_DB_PASSWORD: ${LLM_DB_PASSWORD}
+      LLM_DB_NAME: ${LLM_DB_NAME:-llm_db}
+      AGENT_DB_USER: ${AGENT_DB_USER}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD}
+      AGENT_DB_NAME: ${AGENT_DB_NAME:-agent_db}
+      LEADS_DB_USER: ${LEADS_DB_USER}
+      LEADS_DB_PASSWORD: ${LEADS_DB_PASSWORD}
+      LEADS_DB_NAME: ${LEADS_DB_NAME:-leads_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inbetwin-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: inbetwin-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inbetwin-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: inbetwin-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-inbetwin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inbetwin-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: inbetwin-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - inbetwin-network
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Application Services
+  # ──────────────────────────────────────────────────────────────────────────
+  auth-service:
+    image: ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}/auth-service:${IMAGE_TAG:-latest}
+    container_name: inbetwin-auth-service
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      ENVIRONMENT: production
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-auth_db}
+      DB_SSL_MODE: disable
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-https://${DOMAIN}/api/v1/auth/oauth/google/callback}
+      YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID}
+      YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET}
+      YANDEX_REDIRECT_URL: ${YANDEX_REDIRECT_URL}
+      VK_APP_ID_ANDROID: ${VK_APP_ID_ANDROID}
+      FRONTEND_URL: ${FRONTEND_URL:-https://${DOMAIN}}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/secrets/firebase-adminsdk.json
+    volumes:
+      - ./secrets/firebase-adminsdk.json:/app/secrets/firebase-adminsdk.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - inbetwin-network
+
+  social-service:
+    image: ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}/social-service:${IMAGE_TAG:-latest}
+    container_name: inbetwin-social-service
+    restart: unless-stopped
+    environment:
+      PORT: "3002"
+      ENVIRONMENT: production
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${SOCIAL_DB_USER}
+      DB_PASSWORD: ${SOCIAL_DB_PASSWORD}
+      DB_NAME: ${SOCIAL_DB_NAME:-social_db}
+      DB_SSL_MODE: disable
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL}
+      TELEGRAM_APP_ID: ${TELEGRAM_APP_ID:-0}
+      TELEGRAM_APP_HASH: ${TELEGRAM_APP_HASH}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      VK_APP_ID_WEB: ${VK_APP_ID_WEB}
+      VK_APP_SECRET_WEB: ${VK_APP_SECRET_WEB}
+      VK_REDIRECT_URI_WEB: ${VK_REDIRECT_URI_WEB:-https://${DOMAIN}/api/v1/social/vk/oauth/user/callback}
+      VK_REDIRECT_URI_GROUP: ${VK_REDIRECT_URI_GROUP}
+      VK_APP_ID_ANDROID: ${VK_APP_ID_ANDROID}
+      VK_APP_SECRET_ANDROID: ${VK_APP_SECRET_ANDROID}
+      VK_REDIRECT_URI_ANDROID: ${VK_REDIRECT_URI_ANDROID}
+      VK_APP_ID_IOS: ${VK_APP_ID_IOS}
+      VK_APP_SECRET_IOS: ${VK_APP_SECRET_IOS}
+      VK_REDIRECT_URI_IOS: ${VK_REDIRECT_URI_IOS}
+      FRONTEND_URL: ${FRONTEND_URL:-https://${DOMAIN}}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      RAG_SERVICE_URL: http://rag-service:3004
+      LLM_SERVICE_URL: http://llm-service:3005
+      AUTH_SERVICE_URL: http://auth-service:3001
+      PINTEREST_ACCESS_TOKEN: ${PINTEREST_ACCESS_TOKEN}
+      FACEBOOK_PAGE_TOKEN: ${FACEBOOK_PAGE_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - inbetwin-network
+
+  agent-service:
+    image: ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}/agent-service:${IMAGE_TAG:-latest}
+    container_name: inbetwin-agent-service
+    restart: unless-stopped
+    environment:
+      PORT: "3003"
+      ENVIRONMENT: production
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${AGENT_DB_USER}
+      DB_PASSWORD: ${AGENT_DB_PASSWORD}
+      DB_NAME: ${AGENT_DB_NAME:-agent_db}
+      DB_SSL_MODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - inbetwin-network
+
+  rag-service:
+    image: ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}/rag-service:${IMAGE_TAG:-latest}
+    container_name: inbetwin-rag-service
+    restart: unless-stopped
+    environment:
+      PORT: "3004"
+      ENVIRONMENT: production
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${RAG_DB_USER}
+      DB_PASSWORD: ${RAG_DB_PASSWORD}
+      DB_NAME: ${RAG_DB_NAME:-rag_db}
+      DB_SSL_MODE: disable
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-cohere}
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      COHERE_EMBEDDING_MODEL: ${COHERE_EMBEDDING_MODEL:-embed-v4.0}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OPENAI_EMBEDDING_DIMS: ${OPENAI_EMBEDDING_DIMS:-1536}
+      PINECONE_API_KEY: ${PINECONE_API_KEY}
+      PINECONE_HOST: ${PINECONE_HOST}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
+      PUBLIC_BASE_URL: https://${DOMAIN}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_MIN_SCORE: ${RAG_MIN_SCORE:-0.70}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-inbetwin-rag}
+      MINIO_USE_SSL: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3004/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - inbetwin-network
+
+  llm-service:
+    image: ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}/llm-service:${IMAGE_TAG:-latest}
+    container_name: inbetwin-llm-service
+    restart: unless-stopped
+    environment:
+      PORT: "3005"
+      ENVIRONMENT: production
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${LLM_DB_USER}
+      DB_PASSWORD: ${LLM_DB_PASSWORD}
+      DB_NAME: ${LLM_DB_NAME:-llm_db}
+      DB_SSL_MODE: disable
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      MAX_TOOL_ITERATIONS: ${MAX_TOOL_ITERATIONS:-5}
+      HISTORY_SIZE: ${HISTORY_SIZE:-20}
+      RAG_SERVICE_URL: http://rag-service:3004
+      AGENT_SERVICE_URL: http://agent-service:3003
+      LEAD_SCORING_SERVICE_URL: http://lead-scoring-service:3006
+      AUTH_SERVICE_URL: http://auth-service:3001
+      HOT_LEAD_THRESHOLD: ${HOT_LEAD_THRESHOLD:-80}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL_CALENDAR:-https://${DOMAIN}/api/v1/llm/google/callback}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+      lead-scoring-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3005/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - inbetwin-network
+
+  lead-scoring-service:
+    image: ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}/lead-scoring-service:${IMAGE_TAG:-latest}
+    container_name: inbetwin-lead-scoring-service
+    restart: unless-stopped
+    environment:
+      PORT: "3006"
+      ENVIRONMENT: production
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${LEADS_DB_USER}
+      DB_PASSWORD: ${LEADS_DB_PASSWORD}
+      DB_NAME: ${LEADS_DB_NAME:-leads_db}
+      DB_SSL_MODE: disable
+      HOT_LEAD_THRESHOLD: ${HOT_LEAD_THRESHOLD:-80}
+      NOTIFICATIONS_URL: ${NOTIFICATIONS_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3006/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - inbetwin-network
+
+  api-gateway:
+    image: ${IMAGE_PREFIX:-registry.gitlab.com/khdinova/inbetwinner}/api-gateway:${IMAGE_TAG:-latest}
+    container_name: inbetwin-api-gateway
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      ENVIRONMENT: production
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+      AUTH_SERVICE_URL: http://auth-service:3001
+      SOCIAL_SERVICE_URL: http://social-service:3002
+      AGENT_SERVICE_URL: http://agent-service:3003
+      RAG_SERVICE_URL: http://rag-service:3004
+      LLM_SERVICE_URL: http://llm-service:3005
+      LEAD_SCORING_SERVICE_URL: http://lead-scoring-service:3006
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: "0"
+      RATE_LIMIT_MAX: "50"
+      RATE_LIMIT_WINDOW: "10s"
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      social-service:
+        condition: service_healthy
+      agent-service:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+      llm-service:
+        condition: service_healthy
+      lead-scoring-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - inbetwin-network
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Nginx reverse proxy + Let's Encrypt
+  # ──────────────────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: inbetwin-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./landing:/var/www/landing:ro
+      - certbot_certs:/etc/letsencrypt:ro
+      - certbot_challenge:/var/www/certbot:ro
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    networks:
+      - inbetwin-network
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: inbetwin-certbot
+    restart: unless-stopped
+    volumes:
+      - certbot_certs:/etc/letsencrypt
+      - certbot_challenge:/var/www/certbot
+    # Renew every 12 hours; first-run cert issuance is done via scripts/setup-server.sh
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done'
+    networks:
+      - inbetwin-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  certbot_certs:
+  certbot_challenge:
+
+networks:
+  inbetwin-network:
+    driver: bridge
