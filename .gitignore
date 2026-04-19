@@ -58,6 +58,8 @@ Thumbs.db
 *~
 
 SMOKE_TEST.md
+agents.md
+claude.md
 
 # Test coverage
 coverage.*
