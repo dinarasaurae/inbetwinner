@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>inBeTwin — AI-автоматизация B2B продаж</title>
+  <meta name="description" content="Мультиагентная платформа автоматизации коммуникаций с клиентами через мессенджеры. AI-агенты автономно ведут диалоги и выполняют бизнес-операции." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d2e;
+      --border: #2a2d3e;
+      --accent: #6366f1;
+      --accent-light: #818cf8;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --green: #22c55e;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.6;
+    }
+
+    /* ── Layout ── */
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    /* ── Nav ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(15,17,23,0.85); backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 0;
+    }
+    nav .inner { display: flex; align-items: center; justify-content: space-between; }
+    .logo { font-size: 1.25rem; font-weight: 700; color: var(--accent-light); letter-spacing: -0.5px; }
+    .logo span { color: var(--text); }
+    nav a { color: var(--muted); text-decoration: none; font-size: .9rem; margin-left: 24px; }
+    nav a:hover { color: var(--text); }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 100px 0 80px;
+      text-align: center;
+    }
+    .badge {
+      display: inline-block; padding: 4px 14px;
+      background: rgba(99,102,241,.15); border: 1px solid rgba(99,102,241,.35);
+      border-radius: 99px; font-size: .8rem; color: var(--accent-light);
+      margin-bottom: 24px;
+    }
+    h1 {
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      font-weight: 800; letter-spacing: -1px;
+      line-height: 1.15; margin-bottom: 20px;
+    }
+    h1 em { color: var(--accent-light); font-style: normal; }
+    .hero p {
+      font-size: 1.1rem; color: var(--muted);
+      max-width: 580px; margin: 0 auto 36px;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 28px; border-radius: 8px;
+      font-size: .95rem; font-weight: 600; text-decoration: none;
+      transition: all .2s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-light); }
+    .btn-outline { border: 1px solid var(--border); color: var(--text); margin-left: 12px; }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent-light); }
+
+    /* ── Features ── */
+    .section { padding: 72px 0; }
+    .section-title { font-size: 1.8rem; font-weight: 700; margin-bottom: 8px; }
+    .section-sub { color: var(--muted); margin-bottom: 48px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 28px;
+    }
+    .card-icon { font-size: 2rem; margin-bottom: 16px; }
+    .card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; }
+    .card p { color: var(--muted); font-size: .9rem; }
+
+    /* ── Integrations ── */
+    .integrations { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+    .tag {
+      padding: 6px 16px; border-radius: 6px;
+      background: var(--surface); border: 1px solid var(--border);
+      font-size: .85rem; color: var(--muted);
+    }
+    .tag.active { border-color: var(--accent); color: var(--accent-light); }
+
+    /* ── ToS ── */
+    #tos, #privacy {
+      background: var(--surface); border-radius: 16px;
+      padding: 48px; margin-top: 32px;
+      border: 1px solid var(--border);
+    }
+    #tos h2, #privacy h2 { font-size: 1.6rem; margin-bottom: 8px; }
+    .tos-date { color: var(--muted); font-size: .85rem; margin-bottom: 32px; }
+    #tos h3, #privacy h3 { font-size: 1.05rem; font-weight: 600; margin: 28px 0 10px; color: var(--accent-light); }
+    #tos p, #privacy p, #tos li, #privacy li { color: var(--muted); font-size: .9rem; margin-bottom: 10px; }
+    #tos ul, #privacy ul { padding-left: 20px; }
+    #tos li, #privacy li { margin-bottom: 6px; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 0; margin-top: 80px;
+      color: var(--muted); font-size: .85rem;
+    }
+    footer .inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+    footer a { color: var(--muted); text-decoration: none; }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 600px) {
+      .hero { padding: 60px 0 48px; }
+      #tos, #privacy { padding: 28px; }
+      nav a:not(:first-child) { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="container inner">
+    <div class="logo">in<span>Be</span>Twin</div>
+    <div>
+      <a href="#features">Возможности</a>
+      <a href="#integrations">Интеграции</a>
+      <a href="#tos">Условия</a>
+      <a href="#privacy">Конфиденциальность</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Hero ─────────────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="container">
+    <div class="badge">Мультиагентная платформа</div>
+    <h1>AI-агенты, которые<br/><em>работают вместо вас</em></h1>
+    <p>Автоматизируйте коммуникации с клиентами через Telegram и VK. Агенты автономно ведут диалоги, квалифицируют лиды и создают задачи — без участия менеджера.</p>
+    <a class="btn btn-primary" href="mailto:hello@inbetwin.ru">Получить доступ</a>
+    <a class="btn btn-outline" href="#features">Узнать больше</a>
+  </div>
+</section>
+
+<!-- ── Features ──────────────────────────────────────────────────────────── -->
+<section class="section" id="features">
+  <div class="container">
+    <h2 class="section-title">Как это работает</h2>
+    <p class="section-sub">5 автономных агентов с оркестрацией — Supervisor анализирует контекст и выстраивает цепочку выполнения</p>
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-icon">🎯</div>
+        <h3>Lead Scoring</h3>
+        <p>Real-time квалификация лидов 0–100 баллов по каждому сообщению. Push-уведомление при score &gt; 90.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔍</div>
+        <h3>RAG-поиск</h3>
+        <p>Гибридный поиск по базе знаний: BM25 + семантический поиск через Pinecone → top-3 релевантных фрагмента.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🤖</div>
+        <h3>Tool Calling</h3>
+        <p>Агент сам создаёт задачи в Notion, назначает встречи в Google Calendar и отправляет ответы — без участия человека.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">👤</div>
+        <h3>Цифровые двойники</h3>
+        <p>Агрегация истории переписки и поведенческих сигналов клиента из всех каналов в единый профиль.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">⚡</div>
+        <h3>Быстрый ответ</h3>
+        <p>Генерация ответа агента &lt; 10 секунд. Обработка webhook &lt; 3 секунд. Transactional Outbox для надёжности.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">📊</div>
+        <h3>Мониторинг</h3>
+        <p>Реальное время — действия агентов, статус лидов, аналитика по каналам в мобильном приложении.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Integrations ───────────────────────────────────────────────────────── -->
+<section class="section" id="integrations">
+  <div class="container">
+    <h2 class="section-title">Интеграции</h2>
+    <p class="section-sub">Мессенджеры, CRM и инструменты, с которыми работают агенты</p>
+    <div class="integrations">
+      <span class="tag active">Telegram</span>
+      <span class="tag active">VK</span>
+      <span class="tag">Pinterest</span>
+      <span class="tag">Facebook</span>
+      <span class="tag active">Notion</span>
+      <span class="tag active">Google Calendar</span>
+      <span class="tag active">Google Sheets</span>
+      <span class="tag active">OpenAI / Groq</span>
+      <span class="tag active">Cohere Embeddings</span>
+      <span class="tag active">Pinecone</span>
+      <span class="tag">Instagram (скоро)</span>
+      <span class="tag">WhatsApp (скоро)</span>
+    </div>
+  </div>
+</section>
+
+<!-- ── Terms of Service ───────────────────────────────────────────────────── -->
+<section class="section" id="tos">
+  <div class="container">
+    <div id="tos">
+      <h2>Условия использования</h2>
+      <p class="tos-date">Дата вступления в силу: 19 апреля 2026 г.</p>
+
+      <h3>1. Принятие условий</h3>
+      <p>Используя приложение и сервисы inBeTwin («Сервис», «мы», «нас»), вы соглашаетесь с настоящими Условиями использования («Условия»). Если вы не согласны с Условиями, пожалуйста, не используйте Сервис.</p>
+
+      <h3>2. Описание сервиса</h3>
+      <p>inBeTwin — платформа автоматизации коммуникаций на базе искусственного интеллекта, которая позволяет бизнесу автоматически обрабатывать входящие сообщения через мессенджеры Telegram и ВКонтакте, квалифицировать лидов и выполнять бизнес-операции (создание задач, планирование встреч).</p>
+
+      <h3>3. Учётные записи и авторизация</h3>
+      <ul>
+        <li>Вы несёте ответственность за сохранность учётных данных и всех действий, совершённых под вашей учётной записью.</li>
+        <li>Вы обязуетесь предоставлять достоверную и актуальную информацию при регистрации.</li>
+        <li>При подключении сторонних аккаунтов (Telegram, ВКонтакте, Google) вы подтверждаете, что имеете право предоставлять доступ к этим аккаунтам.</li>
+      </ul>
+
+      <h3>4. Допустимое использование</h3>
+      <p>Вы соглашаетесь использовать Сервис только в законных целях. Запрещается:</p>
+      <ul>
+        <li>Рассылка спама, несанкционированных рекламных сообщений или нежелательного контента.</li>
+        <li>Нарушение прав третьих лиц, включая авторские права и права на неприкосновенность частной жизни.</li>
+        <li>Использование Сервиса в мошеннических или вводящих в заблуждение целях.</li>
+        <li>Попытки получить несанкционированный доступ к системам или данным третьих лиц.</li>
+        <li>Нарушение правил использования подключённых платформ (Telegram, ВКонтакте, Pinterest, Facebook).</li>
+      </ul>
+
+      <h3>5. Данные пользователей и конфиденциальность</h3>
+      <p>Обработка персональных данных осуществляется в соответствии с нашей <a href="#privacy" style="color:var(--accent-light)">Политикой конфиденциальности</a>. Вы даёте согласие на обработку данных ваших клиентов исключительно в рамках предоставления Сервиса и несёте ответственность за получение необходимых разрешений от ваших клиентов.</p>
+
+      <h3>6. Интеграции со сторонними сервисами</h3>
+      <p>Сервис интегрируется с платформами третьих сторон (Telegram, ВКонтакте, Google, Notion и др.). Использование этих интеграций регулируется условиями соответствующих платформ. Мы не несём ответственности за изменения API или политик этих платформ.</p>
+
+      <h3>7. Интеллектуальная собственность</h3>
+      <p>Все права на программное обеспечение, логотипы, торговые марки и контент Сервиса принадлежат inBeTwin или её лицензиарам. Базы знаний и данные, загруженные пользователями, остаются собственностью пользователей.</p>
+
+      <h3>8. Ограничение ответственности</h3>
+      <p>Сервис предоставляется «как есть». Мы не гарантируем непрерывную или безошибочную работу. В максимально допустимой законом степени наша ответственность ограничена суммой, уплаченной вами за Сервис за последние 3 месяца.</p>
+
+      <h3>9. Прекращение использования</h3>
+      <p>Мы оставляем за собой право приостановить или прекратить доступ к Сервису при нарушении настоящих Условий. Вы можете прекратить использование Сервиса в любое время, удалив свою учётную запись.</p>
+
+      <h3>10. Применимое право</h3>
+      <p>Настоящие Условия регулируются законодательством Российской Федерации. Споры разрешаются в судах по месту нахождения компании.</p>
+
+      <h3>11. Изменение условий</h3>
+      <p>Мы можем обновлять Условия, уведомляя вас не менее чем за 14 дней до вступления изменений в силу. Продолжение использования Сервиса означает принятие новых Условий.</p>
+
+      <h3>Контакты</h3>
+      <p>По вопросам, связанным с Условиями использования: <a href="mailto:legal@inbetwin.ru" style="color:var(--accent-light)">legal@inbetwin.ru</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Privacy Policy ─────────────────────────────────────────────────────── -->
+<section class="section" id="privacy">
+  <div class="container">
+    <div id="privacy">
+      <h2>Политика конфиденциальности</h2>
+      <p class="tos-date">Дата вступления в силу: 19 апреля 2026 г.</p>
+
+      <h3>1. Какие данные мы собираем</h3>
+      <ul>
+        <li><strong>Данные учётной записи:</strong> email, имя, хэш пароля, токены OAuth.</li>
+        <li><strong>Данные мессенджеров:</strong> идентификаторы аккаунтов Telegram / ВКонтакте, зашифрованные сессионные токены.</li>
+        <li><strong>Данные переписки:</strong> входящие сообщения клиентов, обрабатываемые агентом, и ответы агента.</li>
+        <li><strong>База знаний:</strong> документы, QA-пары, URL, загружаемые пользователем.</li>
+        <li><strong>Технические данные:</strong> IP-адрес, User-Agent, логи запросов (хранятся не более 90 дней).</li>
+      </ul>
+
+      <h3>2. Как мы используем данные</h3>
+      <ul>
+        <li>Для предоставления и улучшения Сервиса.</li>
+        <li>Для генерации ответов AI-агентами (данные передаются в OpenAI / Cohere / Groq).</li>
+        <li>Для векторного поиска (Pinecone) по базе знаний пользователя.</li>
+        <li>Для отправки push-уведомлений о горячих лидах (Firebase).</li>
+        <li>Мы не продаём и не передаём ваши данные третьим лицам в коммерческих целях.</li>
+      </ul>
+
+      <h3>3. Хранение и безопасность</h3>
+      <ul>
+        <li>Сессионные токены мессенджеров хранятся в зашифрованном виде (AES-256).</li>
+        <li>Все данные в базе данных PostgreSQL на сервере в России.</li>
+        <li>Доступ к данным возможен только по HTTPS.</li>
+        <li>Мы применяем JWT-аутентификацию и ограничение частоты запросов (rate limiting).</li>
+      </ul>
+
+      <h3>4. Передача данных третьим сторонам</h3>
+      <p>Для работы Сервиса данные могут передаваться следующим провайдерам:</p>
+      <ul>
+        <li><strong>OpenAI / Groq</strong> — генерация ответов AI (тексты сообщений).</li>
+        <li><strong>Cohere</strong> — создание векторных эмбеддингов (тексты из базы знаний).</li>
+        <li><strong>Pinecone</strong> — хранение и поиск векторов.</li>
+        <li><strong>Google</strong> — OAuth, Sheets, Calendar (данные, необходимые для конкретной интеграции).</li>
+        <li><strong>Firebase (Google)</strong> — push-уведомления (device token).</li>
+      </ul>
+
+      <h3>5. Ваши права</h3>
+      <p>В соответствии с ФЗ-152 «О персональных данных» вы имеете право:</p>
+      <ul>
+        <li>Получить доступ к своим данным.</li>
+        <li>Потребовать исправления неточных данных.</li>
+        <li>Потребовать удаления своих данных (право на забвение).</li>
+        <li>Отозвать согласие на обработку данных.</li>
+      </ul>
+      <p>Для реализации прав обратитесь: <a href="mailto:privacy@inbetwin.ru" style="color:var(--accent-light)">privacy@inbetwin.ru</a></p>
+
+      <h3>6. Cookie</h3>
+      <p>Мы используем только технически необходимые cookie для сессий пользователя. Маркетинговые или аналитические cookie не применяются.</p>
+
+      <h3>7. Изменение политики</h3>
+      <p>Мы уведомим вас об изменениях через email или интерфейс приложения не менее чем за 14 дней.</p>
+
+      <h3>Контакты оператора</h3>
+      <p>По вопросам обработки персональных данных: <a href="mailto:privacy@inbetwin.ru" style="color:var(--accent-light)">privacy@inbetwin.ru</a></p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container inner">
+    <span>© 2026 inBeTwin. Все права защищены.</span>
+    <div>
+      <a href="#tos">Условия использования</a> &nbsp;·&nbsp;
+      <a href="#privacy">Конфиденциальность</a> &nbsp;·&nbsp;
+      <a href="mailto:hello@inbetwin.ru">hello@inbetwin.ru</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
