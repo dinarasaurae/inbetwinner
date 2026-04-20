@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/database"
+	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/amocrm"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/calendar"
 	"github.com/google/uuid"
 	openai "github.com/sashabaranov/go-openai"
@@ -60,6 +61,61 @@ var SaveContactSchema = openai.FunctionDefinition{
 	}`),
 }
 
+var AmoCRMCreateLeadSchema = openai.FunctionDefinition{
+	Name:        "create_amocrm_lead",
+	Description: "Creates a new lead in AmoCRM (Kommo) CRM system. Use when you have identified a potential client and want to register them in CRM.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"name":{"type":"string","description":"Lead name, e.g. 'Website request from Acme Corp'"},
+			"price":{"type":"integer","description":"Deal value in rubles (optional)"},
+			"pipeline_id":{"type":"integer","description":"Pipeline ID (optional, uses default pipeline if omitted)"},
+			"contact_name":{"type":"string","description":"Contact person full name"},
+			"contact_phone":{"type":"string","description":"Contact phone number"},
+			"contact_email":{"type":"string","description":"Contact email address"},
+			"notes":{"type":"string","description":"Additional notes about the lead"}
+		},
+		"required":["name"]
+	}`),
+}
+
+var AmoCRMCreateTaskSchema = openai.FunctionDefinition{
+	Name:        "create_amocrm_task",
+	Description: "Creates a task in AmoCRM (Kommo) for a manager to follow up. Use to schedule callbacks, meetings or reminders.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"text":{"type":"string","description":"Task description, e.g. 'Call back to discuss pricing'"},
+			"lead_id":{"type":"integer","description":"ID of the lead to link this task to (optional)"},
+			"due_date":{"type":"string","description":"Due datetime ISO 8601, e.g. 2026-04-20T14:00:00+03:00 (default: tomorrow)"}
+		},
+		"required":["text"]
+	}`),
+}
+
+var AmoCRMAddNoteSchema = openai.FunctionDefinition{
+	Name:        "add_amocrm_note",
+	Description: "Adds a text note to an existing lead in AmoCRM. Use to record conversation summary, contact details, or any context that a manager should see.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"lead_id":{"type":"integer","description":"ID of the lead to attach the note to"},
+			"text":{"type":"string","description":"Note text (supports newlines)"}
+		},
+		"required":["lead_id","text"]
+	}`),
+}
+
+var AmoCRMGetPipelinesSchema = openai.FunctionDefinition{
+	Name:        "get_amocrm_pipelines",
+	Description: "Returns the list of sales pipelines and their stages (statuses) in AmoCRM. Call this before create_amocrm_lead when you need to pick the correct pipeline_id.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{},
+		"required":[]
+	}`),
+}
+
 var CallOperatorSchema = openai.FunctionDefinition{
 	Name:        "call_operator",
 	Description: "Escalate the conversation to a human operator. Use when you cannot answer the question, need authorisation, or the user explicitly asks to speak with a person.",
@@ -73,12 +129,13 @@ var CallOperatorSchema = openai.FunctionDefinition{
 }
 
 type BuiltinHandler struct {
-	calSvc *calendar.Service
-	db     *database.DB
+	calSvc    *calendar.Service
+	amoCRMSvc *amocrm.Service
+	db        *database.DB
 }
 
-func NewBuiltinHandler(calSvc *calendar.Service, db *database.DB) *BuiltinHandler {
-	return &BuiltinHandler{calSvc: calSvc, db: db}
+func NewBuiltinHandler(calSvc *calendar.Service, amoCRMSvc *amocrm.Service, db *database.DB) *BuiltinHandler {
+	return &BuiltinHandler{calSvc: calSvc, amoCRMSvc: amoCRMSvc, db: db}
 }
 
 func (h *BuiltinHandler) HandleCalendarCreate(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
@@ -138,4 +195,64 @@ func (h *BuiltinHandler) HandleSaveContact(ctx context.Context, workspaceID uuid
 		return "", err
 	}
 	return `{"message":"Контактная информация сохранена"}`, nil
+}
+
+func (h *BuiltinHandler) HandleAmoCRMCreateLead(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
+	if h.amoCRMSvc == nil {
+		return "", fmt.Errorf("AmoCRM не подключён")
+	}
+	var p amocrm.CreateLeadParams
+	if err := json.Unmarshal(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	result, err := h.amoCRMSvc.CreateLead(ctx, workspaceID, p)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
+func (h *BuiltinHandler) HandleAmoCRMCreateTask(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
+	if h.amoCRMSvc == nil {
+		return "", fmt.Errorf("AmoCRM не подключён")
+	}
+	var p amocrm.CreateTaskParams
+	if err := json.Unmarshal(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	result, err := h.amoCRMSvc.CreateTask(ctx, workspaceID, p)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
+func (h *BuiltinHandler) HandleAmoCRMAddNote(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
+	if h.amoCRMSvc == nil {
+		return "", fmt.Errorf("AmoCRM не подключён")
+	}
+	var p amocrm.AddNoteParams
+	if err := json.Unmarshal(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	result, err := h.amoCRMSvc.AddNote(ctx, workspaceID, p)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
+func (h *BuiltinHandler) HandleAmoCRMGetPipelines(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+	if h.amoCRMSvc == nil {
+		return "", fmt.Errorf("AmoCRM не подключён")
+	}
+	pipelines, err := h.amoCRMSvc.GetPipelines(ctx, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(pipelines)
+	return string(out), nil
 }

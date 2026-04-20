@@ -293,6 +293,9 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL_CALENDAR:-https://${DOMAIN}/api/v1/llm/google/callback}
+      AMOCRM_CLIENT_ID: ${AMOCRM_CLIENT_ID}
+      AMOCRM_CLIENT_SECRET: ${AMOCRM_CLIENT_SECRET}
+      AMOCRM_REDIRECT_URL: ${AMOCRM_REDIRECT_URL:-https://${DOMAIN}/llm/amocrm/callback}
     depends_on:
       postgres:
         condition: service_healthy

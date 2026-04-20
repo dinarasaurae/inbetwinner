@@ -31,6 +31,10 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 
+	AmoCRMClientID     string
+	AmoCRMClientSecret string
+	AmoCRMRedirectURL  string
+
 	RAGServiceURL        string
 	AgentServiceURL      string
 	LeadScoringServiceURL string
@@ -71,6 +75,10 @@ func Load() *Config {
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:3005/llm/google/callback"),
+
+		AmoCRMClientID:     getEnv("AMOCRM_CLIENT_ID", ""),
+		AmoCRMClientSecret: getEnv("AMOCRM_CLIENT_SECRET", ""),
+		AmoCRMRedirectURL:  getEnv("AMOCRM_REDIRECT_URL", "http://localhost:3005/llm/amocrm/callback"),
 
 		RAGServiceURL:        getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
 		AgentServiceURL:      getEnv("AGENT_SERVICE_URL", "http://agent-service:3003"),

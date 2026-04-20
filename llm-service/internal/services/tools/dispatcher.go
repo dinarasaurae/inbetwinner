@@ -50,6 +50,14 @@ func (d *Dispatcher) Execute(ctx context.Context, workspaceID uuid.UUID, chatUse
 		result, execErr = d.builtin.HandleCalendarList(ctx, workspaceID, argsJSON)
 	case "save_contact_info":
 		result, execErr = d.builtin.HandleSaveContact(ctx, workspaceID, chatUserID, platform, argsJSON)
+	case "create_amocrm_lead":
+		result, execErr = d.builtin.HandleAmoCRMCreateLead(ctx, workspaceID, argsJSON)
+	case "create_amocrm_task":
+		result, execErr = d.builtin.HandleAmoCRMCreateTask(ctx, workspaceID, argsJSON)
+	case "add_amocrm_note":
+		result, execErr = d.builtin.HandleAmoCRMAddNote(ctx, workspaceID, argsJSON)
+	case "get_amocrm_pipelines":
+		result, execErr = d.builtin.HandleAmoCRMGetPipelines(ctx, workspaceID)
 	case "call_operator":
 		// The LLMService detects this tool in usedTools and sends the AGENT_STUCK push.
 		// Here we just return a confirmation so the LLM can craft a polite message to the user.
