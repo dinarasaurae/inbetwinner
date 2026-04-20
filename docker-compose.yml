@@ -351,6 +351,9 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL_CALENDAR:-http://localhost:3005/llm/google/callback}
+      AMOCRM_CLIENT_ID: ${AMOCRM_CLIENT_ID:-}
+      AMOCRM_CLIENT_SECRET: ${AMOCRM_CLIENT_SECRET:-}
+      AMOCRM_REDIRECT_URL: ${AMOCRM_REDIRECT_URL:-http://localhost:3005/llm/amocrm/callback}
 
     ports:
       - "3005:3005"

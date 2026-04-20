@@ -19,6 +19,7 @@ import (
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/handlers"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/middleware"
 	agentsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/agent"
+	amocrmSvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/amocrm"
 	calendarsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/calendar"
 	histsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/history"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/services"
@@ -39,8 +40,9 @@ func main() {
 
 	histService := histsvc.NewService(db)
 	calService := calendarsvc.NewService(db, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
+	amoCRMService := amocrmSvc.NewService(db, cfg.AmoCRMClientID, cfg.AmoCRMClientSecret, cfg.AmoCRMRedirectURL)
 	registry := tools.NewRegistry(db)
-	builtinH := tools.NewBuiltinHandler(calService, db)
+	builtinH := tools.NewBuiltinHandler(calService, amoCRMService, db)
 	dispatcher := tools.NewDispatcher(db, builtinH, registry)
 	agentClient := agentsvc.NewClient(cfg.AgentServiceURL)
 	llmService := services.NewLLMService(cfg, histService, registry, dispatcher, agentClient)
@@ -49,6 +51,7 @@ func main() {
 	chatH := handlers.NewChatHandler(llmService, histService)
 	toolH := handlers.NewToolHandler(toolService)
 	calH := handlers.NewCalendarHandler(calService)
+	amoCRMH := handlers.NewAmoCRMHandler(amoCRMService)
 	socialH := handlers.NewSocialHandler(llmService)
 
 	app := fiber.New(fiber.Config{
@@ -66,6 +69,8 @@ func main() {
 	app.Get("/health", handlers.HealthCheck)
 	// Google OAuth callback is public — Google redirects the browser here
 	app.Get("/llm/google/callback", calH.Callback)
+	// AmoCRM (Kommo) OAuth callback is public — Kommo redirects the browser here
+	app.Get("/llm/amocrm/callback", amoCRMH.Callback)
 
 	llm := app.Group("/llm", middleware.WorkspaceAuth())
 	llm.Post("/chat", chatH.Chat)
@@ -80,6 +85,9 @@ func main() {
 	llm.Get("/google/status", calH.GetStatus)
 	llm.Get("/google/events", calH.ListEvents)
 	llm.Post("/google/events", calH.CreateEvent)
+	llm.Get("/amocrm/auth-url", amoCRMH.GetAuthURL)
+	llm.Get("/amocrm/status", amoCRMH.GetStatus)
+	llm.Get("/amocrm/pipelines", amoCRMH.GetPipelines)
 	// Social-service orchestration endpoint — not a generic chat endpoint.
 	llm.Post("/social/vk/process", socialH.ProcessVK)
 
