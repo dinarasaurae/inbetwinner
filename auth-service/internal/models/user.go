@@ -39,6 +39,11 @@ type UpdateUserRequest struct {
 	AvatarURL *string `json:"avatar_url" validate:"omitempty,url"`
 }
 
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 type UserResponse struct {
 	ID               uuid.UUID `json:"id"`
 	Email            string    `json:"email"`

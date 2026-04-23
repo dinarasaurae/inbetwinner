@@ -115,6 +115,35 @@ func (h *AuthHandler) GetProfile(c fiber.Ctx) error {
 		"Profile retrieved successfully", user.ToResponse()))
 }
 
+func (h *AuthHandler) ChangePassword(c fiber.Ctx) error {
+	var req models.ChangePasswordRequest
+
+	if err := c.Bind().JSON(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse(
+			"Invalid request format", err.Error()))
+	}
+
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse(
+			"User not authenticated", nil))
+	}
+
+	if err := h.authService.ChangePassword(userID, &req); err != nil {
+		msg := err.Error()
+		if msg == "current password is incorrect" {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(jwtlib.NewErrorResponse(msg, nil))
+		}
+		if msg == "current_password and new_password are required" || msg == "new password must be at least 6 characters" {
+			return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse(msg, nil))
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(jwtlib.NewErrorResponse(
+			"failed to change password", err.Error()))
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("Password changed successfully", nil))
+}
+
 func (h *AuthHandler) UpdateProfile(c fiber.Ctx) error {
 	var req models.UpdateUserRequest
 

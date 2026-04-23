@@ -246,6 +246,42 @@ func (s *AuthService) UpdateUserProfile(userID uuid.UUID, req *models.UpdateUser
 	return user, nil
 }
 
+func (s *AuthService) ChangePassword(userID uuid.UUID, req *models.ChangePasswordRequest) error {
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		return errors.New("current_password and new_password are required")
+	}
+	if len(req.NewPassword) < 6 {
+		return errors.New("new password must be at least 6 characters")
+	}
+
+	var hash *string
+	err := s.db.QueryRow("SELECT password_hash FROM users WHERE id = $1", userID).Scan(&hash)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return errors.New("user not found")
+		}
+		return err
+	}
+	if hash == nil {
+		return errors.New("this account uses social login and has no password")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(*hash), []byte(req.CurrentPassword)); err != nil {
+		return errors.New("current password is incorrect")
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(
+		"UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1",
+		userID, string(newHash),
+	)
+	return err
+}
+
 func (s *AuthService) saveRefreshToken(userID uuid.UUID, refreshToken, deviceInfo string) error {
 	tokenHash := s.jwtService.HashToken(refreshToken)
 	expiresAt := s.jwtService.GetRefreshTokenExpiration()
