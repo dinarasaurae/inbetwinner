@@ -109,6 +109,7 @@ func main() {
 	authProtected := auth.Group("", jwtlib.AuthMiddleware(jwtService))
 	authProtected.Get("/profile", authHandler.GetProfile)
 	authProtected.Put("/profile", authHandler.UpdateProfile)
+	authProtected.Put("/profile/password", authHandler.ChangePassword)
 
 	// ── Notifications (device token registration) ────────────────────────────
 	notifications := api.Group("/notifications", jwtlib.AuthMiddleware(jwtService))
