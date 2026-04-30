@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log"
 
 	"github.com/dinarasaurae/inbetwin-rag-service/internal/models"
@@ -26,9 +27,17 @@ func (h *SheetsHandler) Sync(c fiber.Ctx) error {
 	table, err := h.svc.SyncSheet(c.Context(), wid, req)
 	if err != nil {
 		log.Printf("[sheets/sync] ERROR workspace=%s spreadsheet=%s: %v", wid, req.SpreadsheetID, err)
-		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		return c.Status(statusForSheetsSyncError(err)).JSON(fiber.Map{"error": err.Error()})
 	}
 	return c.Status(201).JSON(table)
+}
+
+func statusForSheetsSyncError(err error) int {
+	var reqErr *services.RequestError
+	if errors.As(err, &reqErr) {
+		return reqErr.Status
+	}
+	return fiber.StatusInternalServerError
 }
 
 // List handles GET /rag/sheets

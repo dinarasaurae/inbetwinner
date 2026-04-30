@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"sort"
 	"strings"
@@ -18,11 +19,12 @@ type SearchService struct {
 }
 
 type SearchRequest struct {
-	Query       string    `json:"query"`
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	Namespaces  []string  `json:"namespaces"`
-	TopK        int       `json:"top_k"`
-	MinScore    float32   `json:"min_score"`
+	Query       string     `json:"query"`
+	WorkspaceID uuid.UUID  `json:"workspace_id"`
+	Namespaces  []string   `json:"namespaces"`
+	NamespaceID *uuid.UUID `json:"namespace_id,omitempty"`
+	TopK        int        `json:"top_k"`
+	MinScore    float32    `json:"min_score"`
 	// AccessMode filters namespaces when no explicit list is given.
 	// "AUTO_QUERY" returns only automatically-queried namespaces (default for LLM pipeline).
 	// "" or "ALL" returns all active namespaces.
@@ -130,6 +132,7 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 
 	vectorRanked := make(map[string]ranked)
 	vectorOrder := []string{}
+	namespaceFilterEnabled := req.NamespaceID != nil
 
 	// --- Vector search (Pinecone) — non-fatal ---
 	queryVec, embedErr := s.embedding.EmbedQuery(ctx, req.Query)
@@ -138,7 +141,19 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 	} else if s.pinecone != nil {
 		// Resolve namespace names → Pinecone NS strings
 		var pineconeNSList []string
-		if len(req.Namespaces) > 0 {
+		if req.NamespaceID != nil {
+			rows, err := s.db.QueryContext(ctx,
+				`SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND id=$2 AND is_active=true`,
+				req.WorkspaceID, *req.NamespaceID)
+			if err == nil {
+				for rows.Next() {
+					var pns string
+					_ = rows.Scan(&pns)
+					pineconeNSList = append(pineconeNSList, pns)
+				}
+				rows.Close()
+			}
+		} else if len(req.Namespaces) > 0 {
 			for _, nsName := range req.Namespaces {
 				rows, err := s.db.QueryContext(ctx,
 					`SELECT pinecone_ns FROM namespaces WHERE workspace_id=$1 AND name=$2 AND is_active=true`,
@@ -214,7 +229,10 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 	// knowledge_chunks → knowledge_documents → namespaces
 	chunkNSJoin := ""
 	chunkNSWhere := ""
-	if req.AccessMode == "AUTO_QUERY" && len(req.Namespaces) == 0 {
+	if namespaceFilterEnabled {
+		chunkNSJoin = `JOIN knowledge_documents kd ON kd.id = knowledge_chunks.document_id`
+		chunkNSWhere = `AND kd.namespace_id = $4`
+	} else if req.AccessMode == "AUTO_QUERY" && len(req.Namespaces) == 0 {
 		chunkNSJoin = `JOIN knowledge_documents kd ON kd.id = knowledge_chunks.document_id
                        JOIN namespaces ns ON ns.id = kd.namespace_id`
 		chunkNSWhere = `AND ns.access_mode = 'AUTO_QUERY' AND ns.is_active = true`
@@ -227,9 +245,17 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
           AND knowledge_chunks.search_vector @@ plainto_tsquery('russian', $1)
           ` + chunkNSWhere + `
         ORDER BY rank DESC LIMIT $3`
-	ftsRows, err := s.db.QueryContext(ctx, chunkSQL,
-		req.Query, req.WorkspaceID, req.TopK*2,
-	)
+	var ftsRows *sql.Rows
+	var err error
+	if namespaceFilterEnabled {
+		ftsRows, err = s.db.QueryContext(ctx, chunkSQL,
+			req.Query, req.WorkspaceID, req.TopK*2, *req.NamespaceID,
+		)
+	} else {
+		ftsRows, err = s.db.QueryContext(ctx, chunkSQL,
+			req.Query, req.WorkspaceID, req.TopK*2,
+		)
+	}
 	if err == nil {
 		defer ftsRows.Close()
 		bmsRank := 1
@@ -255,7 +281,9 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 	// Apply access_mode filter via knowledge_tables → namespaces join if needed.
 	tableNSJoin := ""
 	tableNSWhere := ""
-	if req.AccessMode == "AUTO_QUERY" && len(req.Namespaces) == 0 {
+	if namespaceFilterEnabled {
+		tableNSWhere = `AND kt.namespace_id = $4`
+	} else if req.AccessMode == "AUTO_QUERY" && len(req.Namespaces) == 0 {
 		tableNSJoin = `JOIN namespaces ns ON ns.id = kt.namespace_id`
 		tableNSWhere = `AND ns.access_mode = 'AUTO_QUERY' AND ns.is_active = true`
 	}
@@ -269,9 +297,16 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
           AND ktr.search_vector @@ to_tsquery('russian', $1)
           ` + tableNSWhere + `
         ORDER BY rank DESC LIMIT $3`
-	tableRows, err := s.db.QueryContext(ctx, tableSQL,
-		orQuery, req.WorkspaceID, req.TopK*2,
-	)
+	var tableRows *sql.Rows
+	if namespaceFilterEnabled {
+		tableRows, err = s.db.QueryContext(ctx, tableSQL,
+			orQuery, req.WorkspaceID, req.TopK*2, *req.NamespaceID,
+		)
+	} else {
+		tableRows, err = s.db.QueryContext(ctx, tableSQL,
+			orQuery, req.WorkspaceID, req.TopK*2,
+		)
+	}
 	if err == nil {
 		defer tableRows.Close()
 		tRank := 1
@@ -299,6 +334,77 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 		log.Printf("[search] table rows FTS query failed: %v", err)
 	}
 
+	// --- BM25: QA pairs ---
+	qaRanked := make(map[string]ranked)
+	qaOrder := []string{}
+	qaWhere := `qa.workspace_id=$2`
+	if namespaceFilterEnabled {
+		qaWhere += ` AND qa.namespace_id=$4`
+	} else if req.AccessMode == "AUTO_QUERY" && len(req.Namespaces) == 0 {
+		qaWhere += ` AND ns.access_mode = 'AUTO_QUERY' AND ns.is_active = true`
+	}
+	qaSQL := `
+        SELECT qa.id::text,
+               qa.question,
+               qa.answer,
+               qa.is_strict,
+               CASE
+                   WHEN lower(qa.question) = lower($1) THEN 100
+                   ELSE ts_rank_cd(
+                       to_tsvector('simple', lower(coalesce(qa.question, '') || ' ' || coalesce(qa.answer, ''))),
+                       plainto_tsquery('simple', lower($1))
+                   )
+               END AS rank
+        FROM qa_pairs qa
+        JOIN namespaces ns ON ns.id = qa.namespace_id
+        WHERE ` + qaWhere + `
+          AND (
+              lower(qa.question) = lower($1)
+              OR to_tsvector('simple', lower(coalesce(qa.question, '') || ' ' || coalesce(qa.answer, '')))
+                 @@ plainto_tsquery('simple', lower($1))
+          )
+        ORDER BY rank DESC, qa.created_at DESC
+        LIMIT $3`
+	var qaRows *sql.Rows
+	if namespaceFilterEnabled {
+		qaRows, err = s.db.QueryContext(ctx, qaSQL,
+			req.Query, req.WorkspaceID, req.TopK*2, *req.NamespaceID,
+		)
+	} else {
+		qaRows, err = s.db.QueryContext(ctx, qaSQL,
+			req.Query, req.WorkspaceID, req.TopK*2,
+		)
+	}
+	if err == nil {
+		defer qaRows.Close()
+		qRank := 1
+		for qaRows.Next() {
+			var id, question, answer string
+			var isStrict bool
+			var score float32
+			if err := qaRows.Scan(&id, &question, &answer, &isStrict, &score); err != nil {
+				continue
+			}
+			qaRanked[id] = ranked{
+				result: SearchResult{
+					Text:   question + "\n" + answer,
+					Score:  score,
+					Source: "qa",
+					Metadata: map[string]interface{}{
+						"question":  question,
+						"answer":    answer,
+						"is_strict": isStrict,
+					},
+				},
+				rank: qRank,
+			}
+			qaOrder = append(qaOrder, id)
+			qRank++
+		}
+	} else {
+		log.Printf("[search] qa FTS query failed: %v", err)
+	}
+
 	// --- Reciprocal Rank Fusion (k=60) ---
 	const k = 60.0
 	rrfScores := make(map[string]float64)
@@ -318,6 +424,12 @@ func (s *SearchService) HybridSearch(ctx context.Context, req SearchRequest) ([]
 		rrfScores[id] += 1.0 / (k + float64(i+1))
 		if _, exists := rrfResults[id]; !exists {
 			rrfResults[id] = tableRanked[id].result
+		}
+	}
+	for i, id := range qaOrder {
+		rrfScores[id] += 1.0 / (k + float64(i+1))
+		if _, exists := rrfResults[id]; !exists {
+			rrfResults[id] = qaRanked[id].result
 		}
 	}
 

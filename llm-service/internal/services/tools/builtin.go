@@ -8,6 +8,7 @@ import (
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/database"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/amocrm"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/calendar"
+	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/zoho"
 	"github.com/google/uuid"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -63,7 +64,7 @@ var SaveContactSchema = openai.FunctionDefinition{
 
 var AmoCRMCreateLeadSchema = openai.FunctionDefinition{
 	Name:        "create_amocrm_lead",
-	Description: "Creates a new lead in AmoCRM (Kommo) CRM system. Use when you have identified a potential client and want to register them in CRM.",
+	Description: "Creates a new lead in amoCRM. Use when you have identified a potential client and want to register them in CRM.",
 	Parameters: json.RawMessage(`{
 		"type":"object",
 		"properties":{
@@ -81,7 +82,7 @@ var AmoCRMCreateLeadSchema = openai.FunctionDefinition{
 
 var AmoCRMCreateTaskSchema = openai.FunctionDefinition{
 	Name:        "create_amocrm_task",
-	Description: "Creates a task in AmoCRM (Kommo) for a manager to follow up. Use to schedule callbacks, meetings or reminders.",
+	Description: "Creates a task in amoCRM for a manager to follow up. Use to schedule callbacks, meetings or reminders.",
 	Parameters: json.RawMessage(`{
 		"type":"object",
 		"properties":{
@@ -116,6 +117,62 @@ var AmoCRMGetPipelinesSchema = openai.FunctionDefinition{
 	}`),
 }
 
+// ── Zoho CRM tool schemas ─────────────────────────────────────────────────────
+
+var ZohoCreateLeadSchema = openai.FunctionDefinition{
+	Name:        "create_zoho_lead",
+	Description: "Creates a new lead record in Zoho CRM. Use when you have identified a potential client and want to register them.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"last_name":{"type":"string","description":"Lead's last name (required)"},
+			"first_name":{"type":"string","description":"Lead's first name"},
+			"company":{"type":"string","description":"Company or organisation name"},
+			"phone":{"type":"string","description":"Phone number"},
+			"email":{"type":"string","description":"Email address"},
+			"description":{"type":"string","description":"Additional context about this lead"}
+		},
+		"required":["last_name"]
+	}`),
+}
+
+var ZohoCreateTaskSchema = openai.FunctionDefinition{
+	Name:        "create_zoho_task",
+	Description: "Creates a task in Zoho CRM for a manager to follow up. Optionally linked to a lead record.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"subject":{"type":"string","description":"Task subject, e.g. 'Call back to discuss pricing'"},
+			"lead_id":{"type":"string","description":"ID of the Zoho CRM Lead to link this task to (optional)"},
+			"due_date":{"type":"string","description":"Due date in YYYY-MM-DD format (default: tomorrow)"}
+		},
+		"required":["subject"]
+	}`),
+}
+
+var ZohoAddNoteSchema = openai.FunctionDefinition{
+	Name:        "add_zoho_note",
+	Description: "Adds a text note to an existing Lead in Zoho CRM. Use to record conversation summaries or important context.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"lead_id":{"type":"string","description":"ID of the Zoho CRM Lead to attach the note to"},
+			"content":{"type":"string","description":"Note text content (supports newlines)"}
+		},
+		"required":["lead_id","content"]
+	}`),
+}
+
+var ZohoGetDealStagesSchema = openai.FunctionDefinition{
+	Name:        "get_zoho_deal_stages",
+	Description: "Returns the Deal stage options in Zoho CRM (pipeline stages). Call this to see available stages before creating a Deal.",
+	Parameters: json.RawMessage(`{
+		"type":"object",
+		"properties":{},
+		"required":[]
+	}`),
+}
+
 var CallOperatorSchema = openai.FunctionDefinition{
 	Name:        "call_operator",
 	Description: "Escalate the conversation to a human operator. Use when you cannot answer the question, need authorisation, or the user explicitly asks to speak with a person.",
@@ -131,11 +188,12 @@ var CallOperatorSchema = openai.FunctionDefinition{
 type BuiltinHandler struct {
 	calSvc    *calendar.Service
 	amoCRMSvc *amocrm.Service
+	zohoCRMSvc *zoho.Service
 	db        *database.DB
 }
 
-func NewBuiltinHandler(calSvc *calendar.Service, amoCRMSvc *amocrm.Service, db *database.DB) *BuiltinHandler {
-	return &BuiltinHandler{calSvc: calSvc, amoCRMSvc: amoCRMSvc, db: db}
+func NewBuiltinHandler(calSvc *calendar.Service, amoCRMSvc *amocrm.Service, zohoCRMSvc *zoho.Service, db *database.DB) *BuiltinHandler {
+	return &BuiltinHandler{calSvc: calSvc, amoCRMSvc: amoCRMSvc, zohoCRMSvc: zohoCRMSvc, db: db}
 }
 
 func (h *BuiltinHandler) HandleCalendarCreate(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
@@ -254,5 +312,67 @@ func (h *BuiltinHandler) HandleAmoCRMGetPipelines(ctx context.Context, workspace
 		return "", err
 	}
 	out, _ := json.Marshal(pipelines)
+	return string(out), nil
+}
+
+// ── Zoho CRM handlers ─────────────────────────────────────────────────────────
+
+func (h *BuiltinHandler) HandleZohoCreateLead(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
+	if h.zohoCRMSvc == nil {
+		return "", fmt.Errorf("Zoho CRM не подключён")
+	}
+	var p zoho.CreateLeadParams
+	if err := json.Unmarshal(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	result, err := h.zohoCRMSvc.CreateLead(ctx, workspaceID, p)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
+func (h *BuiltinHandler) HandleZohoCreateTask(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
+	if h.zohoCRMSvc == nil {
+		return "", fmt.Errorf("Zoho CRM не подключён")
+	}
+	var p zoho.CreateTaskParams
+	if err := json.Unmarshal(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	result, err := h.zohoCRMSvc.CreateTask(ctx, workspaceID, p)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
+func (h *BuiltinHandler) HandleZohoAddNote(ctx context.Context, workspaceID uuid.UUID, argsJSON json.RawMessage) (string, error) {
+	if h.zohoCRMSvc == nil {
+		return "", fmt.Errorf("Zoho CRM не подключён")
+	}
+	var p zoho.AddNoteParams
+	if err := json.Unmarshal(argsJSON, &p); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	result, err := h.zohoCRMSvc.AddNote(ctx, workspaceID, p)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(result)
+	return string(out), nil
+}
+
+func (h *BuiltinHandler) HandleZohoGetDealStages(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+	if h.zohoCRMSvc == nil {
+		return "", fmt.Errorf("Zoho CRM не подключён")
+	}
+	stages, err := h.zohoCRMSvc.GetDealStages(ctx, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	out, _ := json.Marshal(stages)
 	return string(out), nil
 }

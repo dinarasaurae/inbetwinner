@@ -40,6 +40,13 @@ type ChatResponse struct {
 	TotalTokens int        `json:"total_tokens"`
 }
 
+type ragSearchResult struct {
+	Text     string                 `json:"text"`
+	Score    float64                `json:"score"`
+	Source   string                 `json:"source"`
+	Metadata map[string]interface{} `json:"metadata"`
+}
+
 // runtimeParams are the per-request LLM parameters resolved from the agent config.
 type runtimeParams struct {
 	model       string
@@ -126,7 +133,41 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 	histMsgs, _ := s.history.GetHistory(ctx, req.WorkspaceID, req.ChatUserID, params.historySize)
 
 	// 3. Fetch RAG context scoped to this agent's knowledge namespaces.
-	ragContext := s.fetchRAGContext(ctx, req.WorkspaceID, req.Message, params.ragTopK, params.namespaces)
+	ragResults := s.searchRAG(ctx, req.WorkspaceID, req.Message, params.ragTopK, params.namespaces)
+	ragContext := buildRAGContext(ragResults)
+	if strictAnswer, ok := findStrictQAAnswer(req.Message, ragResults); ok {
+		_ = s.history.AppendMessage(ctx, models.ChatMessage{
+			WorkspaceID: req.WorkspaceID,
+			ChatUserID:  req.ChatUserID,
+			Platform:    req.Platform,
+			Role:        models.RoleUser,
+			Content:     req.Message,
+		})
+		_ = s.history.AppendMessage(ctx, models.ChatMessage{
+			WorkspaceID: req.WorkspaceID,
+			ChatUserID:  req.ChatUserID,
+			Platform:    req.Platform,
+			Role:        models.RoleAssistant,
+			Content:     strictAnswer,
+		})
+		s.scoring.ScoreAsync(req.WorkspaceID, req.ChatUserID, req.Platform, req.Message, func(score *ScoreResult) {
+			s.push.SendAsync(req.WorkspaceID, NotifHotLead,
+				"🔥 Горячий лид!",
+				fmt.Sprintf("Пользователь %s (%s) набрал %d баллов", req.ChatUserID, req.Platform, score.Score),
+				map[string]string{
+					"chat_user_id": req.ChatUserID,
+					"platform":     req.Platform,
+					"score":        fmt.Sprintf("%d", score.Score),
+				},
+			)
+		})
+		return &ChatResponse{
+			AgentID:     agentID,
+			Response:    strictAnswer,
+			ToolsUsed:   nil,
+			TotalTokens: 0,
+		}, nil
+	}
 
 	// 4. Resolve tool list (filtered by agent's allowlist).
 	hasCalendar := s.registry.HasGoogleCalendar(ctx, req.WorkspaceID)
@@ -402,10 +443,10 @@ func (s *LLMService) buildSystemPromptWithMemory(base, ragContext, platform, cha
 	return sb.String()
 }
 
-// fetchRAGContext calls rag-service/rag/search, scoped to the agent's namespaces.
-func (s *LLMService) fetchRAGContext(ctx context.Context, workspaceID uuid.UUID, query string, topK int, namespaces []string) string {
+// searchRAG calls rag-service/rag/search, scoped to the agent's namespaces.
+func (s *LLMService) searchRAG(ctx context.Context, workspaceID uuid.UUID, query string, topK int, namespaces []string) []ragSearchResult {
 	if s.cfg.RAGServiceURL == "" {
-		return ""
+		return nil
 	}
 	if topK <= 0 {
 		topK = 3
@@ -422,31 +463,61 @@ func (s *LLMService) fetchRAGContext(ctx context.Context, workspaceID uuid.UUID,
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
 		s.cfg.RAGServiceURL+"/rag/search", bytes.NewReader(payload))
 	if err != nil {
-		return ""
+		return nil
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-User-ID", workspaceID.String())
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer resp.Body.Close()
 	var result struct {
-		Results []struct {
-			Text string `json:"text"`
-		} `json:"results"`
+		Results []ragSearchResult `json:"results"`
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
 	if err := json.Unmarshal(body, &result); err != nil {
-		return ""
+		return nil
 	}
+	return result.Results
+}
+
+// fetchRAGContext calls rag-service/rag/search and returns a prompt-friendly string.
+func (s *LLMService) fetchRAGContext(ctx context.Context, workspaceID uuid.UUID, query string, topK int, namespaces []string) string {
+	return buildRAGContext(s.searchRAG(ctx, workspaceID, query, topK, namespaces))
+}
+
+func buildRAGContext(results []ragSearchResult) string {
 	var parts []string
-	for _, r := range result.Results {
+	for _, r := range results {
 		if r.Text != "" {
 			parts = append(parts, r.Text)
 		}
 	}
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+func findStrictQAAnswer(query string, results []ragSearchResult) (string, bool) {
+	normalizedQuery := normalizeKnowledgeQuery(query)
+	for _, r := range results {
+		if r.Source != "qa" {
+			continue
+		}
+		question, _ := r.Metadata["question"].(string)
+		answer, _ := r.Metadata["answer"].(string)
+		isStrict, _ := r.Metadata["is_strict"].(bool)
+		if !isStrict {
+			continue
+		}
+		if normalizeKnowledgeQuery(question) == normalizedQuery && strings.TrimSpace(answer) != "" {
+			return strings.TrimSpace(answer), true
+		}
+	}
+	return "", false
+}
+
+func normalizeKnowledgeQuery(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
 // ── Social / VK orchestration ────────────────────────────────────────────────
@@ -610,7 +681,8 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 	params, agentID, _ := s.resolveAgentConfig(ctx, chatReq)
 
 	// RAG context.
-	ragContext := s.fetchRAGContext(ctx, req.WorkspaceID, req.Message, params.ragTopK, params.namespaces)
+	ragResults := s.searchRAG(ctx, req.WorkspaceID, req.Message, params.ragTopK, params.namespaces)
+	ragContext := buildRAGContext(ragResults)
 
 	// Build the snippets list for the response (plain strings).
 	snippets := []string{}
@@ -620,6 +692,36 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 				snippets = append(snippets, p)
 			}
 		}
+	}
+	if strictAnswer, ok := findStrictQAAnswer(req.Message, ragResults); ok {
+		mode := "draft"
+		if req.Context == nil || req.Context.AutoReplyEnabled {
+			mode = "auto_reply"
+		}
+		s.scoring.ScoreAsync(req.WorkspaceID, req.ChatUserID, req.Platform, req.Message, func(score *ScoreResult) {
+			s.push.SendAsync(req.WorkspaceID, NotifHotLead,
+				"🔥 Горячий лид!",
+				fmt.Sprintf("Пользователь %s (%s) набрал %d баллов", req.ChatUserID, req.Platform, score.Score),
+				map[string]string{
+					"chat_user_id": req.ChatUserID,
+					"platform":     req.Platform,
+					"score":        fmt.Sprintf("%d", score.Score),
+				},
+			)
+		})
+		return &VKOrchestrationDecision{
+			Mode:              mode,
+			DraftText:         strictAnswer,
+			Confidence:        1.0,
+			Intent:            "faq",
+			SafeIntent:        true,
+			Rationale:         "strict qa exact match",
+			KnowledgeSnippets: snippets,
+			PromptTokens:      0,
+			CompletionTokens:  0,
+			TokensUsed:        0,
+			AgentID:           agentID,
+		}, nil
 	}
 
 	// Build the system prompt, layering agent config + integration policy + memory context.

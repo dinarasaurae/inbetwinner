@@ -37,6 +37,14 @@ func (r *Registry) HasAmoCRM(ctx context.Context, workspaceID uuid.UUID) bool {
 	return err == nil && count > 0
 }
 
+func (r *Registry) HasZohoCRM(ctx context.Context, workspaceID uuid.UUID) bool {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM zoho_integrations WHERE workspace_id=$1 AND is_active=true`,
+		workspaceID).Scan(&count)
+	return err == nil && count > 0
+}
+
 // GetTools returns the tools available for a given workspace.
 //
 // allowedToolIDs — when non-nil, only tools whose ToolID appears in this set
@@ -74,6 +82,21 @@ func (r *Registry) GetTools(ctx context.Context, workspaceID uuid.UUID, hasGoogl
 	}
 	if hasAmoCRM && allowed("builtin-amocrm-add-note") {
 		out = append(out, AvailableTool{Name: "add_amocrm_note", Definition: AmoCRMAddNoteSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-amocrm-add-note"})
+	}
+
+	// Zoho CRM tools — gated on active integration
+	hasZohoCRM := r.HasZohoCRM(ctx, workspaceID)
+	if hasZohoCRM && allowed("builtin-zoho-get-deal-stages") {
+		out = append(out, AvailableTool{Name: "get_zoho_deal_stages", Definition: ZohoGetDealStagesSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-zoho-get-deal-stages"})
+	}
+	if hasZohoCRM && allowed("builtin-zoho-create-lead") {
+		out = append(out, AvailableTool{Name: "create_zoho_lead", Definition: ZohoCreateLeadSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-zoho-create-lead"})
+	}
+	if hasZohoCRM && allowed("builtin-zoho-create-task") {
+		out = append(out, AvailableTool{Name: "create_zoho_task", Definition: ZohoCreateTaskSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-zoho-create-task"})
+	}
+	if hasZohoCRM && allowed("builtin-zoho-add-note") {
+		out = append(out, AvailableTool{Name: "add_zoho_note", Definition: ZohoAddNoteSchema, Type: models.ToolTypeBuiltin, ToolID: "builtin-zoho-add-note"})
 	}
 
 	// call_operator is always available — it's a safety valve for every agent.

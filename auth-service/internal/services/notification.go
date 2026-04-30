@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -54,7 +55,20 @@ func (s *NotificationService) RegisterToken(ctx context.Context, userID uuid.UUI
 		platform = "android"
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, userID).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if !exists {
+		log.Printf("[notifications] skipping device token for unknown user %s", userID)
+		return nil
+	}
+
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO device_tokens (user_id, token, platform)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, token) DO UPDATE

@@ -142,6 +142,18 @@ func main() {
 		return proxyService.ProxyRequest(c, cfg.RAGServiceURL)
 	})
 
+	// amoCRM OAuth callback — amoCRM redirects the browser here after consent.
+	// No JWT: workspace is identified via the OAuth state value.
+	api.Get("/llm/amocrm/callback", func(c fiber.Ctx) error {
+		return proxyService.ProxyRequest(c, cfg.LLMServiceURL)
+	})
+
+	// Zoho CRM OAuth callback — Zoho redirects the browser here after consent.
+	// No JWT: workspace is identified via the OAuth state value.
+	api.Get("/llm/zoho/callback", func(c fiber.Ctx) error {
+		return proxyService.ProxyRequest(c, cfg.LLMServiceURL)
+	})
+
 	protected := api.Group("", jwtlib.AuthMiddleware(jwtService))
 
 	social := protected.Group("/social")

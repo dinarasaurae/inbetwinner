@@ -19,8 +19,8 @@ import (
 const (
 	googleAuthURL  = "https://accounts.google.com/o/oauth2/v2/auth"
 	googleTokenURL = "https://oauth2.googleapis.com/token"
-	// Read-only access to Google Sheets
-	sheetsScope = "https://www.googleapis.com/auth/spreadsheets.readonly"
+	// Full Sheets scope is required for values:batchGetByDataFilter.
+	sheetsScope = "https://www.googleapis.com/auth/spreadsheets"
 )
 
 type GoogleOAuthService struct {
@@ -209,7 +209,7 @@ func (s *GoogleOAuthService) GetValidToken(ctx context.Context, workspaceID uuid
 	}
 
 	// Refresh if token expires within 60 seconds
-	if time.Now().Add(60 * time.Second).After(expiry) && refreshToken != "" {
+	if time.Now().Add(60*time.Second).After(expiry) && refreshToken != "" {
 		token, err := s.refreshToken(ctx, refreshToken)
 		if err != nil {
 			return "", fmt.Errorf("refresh_failed: %w", err)

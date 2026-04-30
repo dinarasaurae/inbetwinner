@@ -58,6 +58,14 @@ func (d *Dispatcher) Execute(ctx context.Context, workspaceID uuid.UUID, chatUse
 		result, execErr = d.builtin.HandleAmoCRMAddNote(ctx, workspaceID, argsJSON)
 	case "get_amocrm_pipelines":
 		result, execErr = d.builtin.HandleAmoCRMGetPipelines(ctx, workspaceID)
+	case "create_zoho_lead":
+		result, execErr = d.builtin.HandleZohoCreateLead(ctx, workspaceID, argsJSON)
+	case "create_zoho_task":
+		result, execErr = d.builtin.HandleZohoCreateTask(ctx, workspaceID, argsJSON)
+	case "add_zoho_note":
+		result, execErr = d.builtin.HandleZohoAddNote(ctx, workspaceID, argsJSON)
+	case "get_zoho_deal_stages":
+		result, execErr = d.builtin.HandleZohoGetDealStages(ctx, workspaceID)
 	case "call_operator":
 		// The LLMService detects this tool in usedTools and sends the AGENT_STUCK push.
 		// Here we just return a confirmation so the LLM can craft a polite message to the user.

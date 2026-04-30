@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -47,19 +48,19 @@ type Config struct {
 	// ── VK per-platform credentials ───────────────────────────────────────────
 	// Register apps at https://vk.com/editapp
 	// Web app (ID 54511648)
-	VKWebAppID      string
-	VKWebAppSecret  string
+	VKWebAppID       string
+	VKWebAppSecret   string
 	VKWebRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/user/callback
 	// Separate public HTTPS callback for community OAuth via oauth.vk.com.
 	VKGroupRedirectURI string // https://yourdomain.com/api/v1/social/vk/oauth/callback
 	// Community OAuth scopes requested when issuing a group token.
-	// Keep this aligned with the rights actually needed for outbound messaging
-	// and rich attachments from the community.
+	// VK only allows a small fixed subset here, so the runtime also sanitizes
+	// this list before building the oauth.vk.com URL.
 	VKCommunityScopes string
 
 	// Android app (ID 54511649)
-	VKAndroidAppID      string
-	VKAndroidAppSecret  string
+	VKAndroidAppID     string
+	VKAndroidAppSecret string
 	// VK ID SDK redirect: vk{clientId}://vk.ru — registered via vkidManifestPlaceholders in build.gradle
 	VKAndroidRedirectURI string
 
@@ -73,6 +74,10 @@ type Config struct {
 	// This stays separate from VK ID SDK redirects so we can preserve the
 	// historically working auto-token path without disturbing app login.
 	VKLegacyMobileRedirectURI string
+	// Some mobile builds send the VK SDK token directly to social-service via
+	// /oauth/user/import. Disabled by default so the app falls back to the
+	// historically working browser OAuth flow.
+	VKAllowUserTokenImport bool
 
 	// Frontend URL — browser is redirected here after web OAuth completes
 	FrontendURL string
@@ -207,22 +212,23 @@ func Load() *Config {
 		TelegramAppHash:       getEnv("TELEGRAM_APP_HASH", ""),
 		EncryptionKey:         encKey,
 
-		VKWebAppID:       getEnv("VK_APP_ID_WEB", "54511648"),
-		VKWebAppSecret:   getEnv("VK_APP_SECRET_WEB", ""),
-		VKWebRedirectURI: getEnv("VK_REDIRECT_URI_WEB", "http://localhost:3002/api/v1/social/vk/oauth/user/callback"),
+		VKWebAppID:         getEnv("VK_APP_ID_WEB", "54511648"),
+		VKWebAppSecret:     getEnv("VK_APP_SECRET_WEB", ""),
+		VKWebRedirectURI:   getEnv("VK_REDIRECT_URI_WEB", "http://localhost:3002/api/v1/social/vk/oauth/user/callback"),
 		VKGroupRedirectURI: getEnv("VK_REDIRECT_URI_GROUP", "http://localhost:3002/api/v1/social/vk/oauth/callback"),
-		VKCommunityScopes: getEnv("VK_COMMUNITY_SCOPES", "messages,manage,photos,docs,stories,wall,market"),
+		VKCommunityScopes:  getEnv("VK_COMMUNITY_SCOPES", "messages,manage,photos,docs,wall,stories"),
 
-		VKAndroidAppID:       getEnv("VK_APP_ID_ANDROID", "54511649"),
-		VKAndroidAppSecret:   getEnv("VK_APP_SECRET_ANDROID", ""),
+		VKAndroidAppID:     getEnv("VK_APP_ID_ANDROID", "54511649"),
+		VKAndroidAppSecret: getEnv("VK_APP_SECRET_ANDROID", ""),
 		// VK ID OAuth 2.1 redirect — vk{clientId}://vk.ru/blank.html
 		VKAndroidRedirectURI: getEnv("VK_REDIRECT_URI_ANDROID", "vk54511649://vk.ru/blank.html"),
 
 		VKIOSAppID:     getEnv("VK_APP_ID_IOS", "54511650"),
 		VKIOSAppSecret: getEnv("VK_APP_SECRET_IOS", ""),
 		// VK ID OAuth 2.1 redirect — vk{clientId}://vk.ru/blank.html
-		VKIOSRedirectURI: getEnv("VK_REDIRECT_URI_IOS", "vk54511650://vk.ru/blank.html"),
+		VKIOSRedirectURI:          getEnv("VK_REDIRECT_URI_IOS", "vk54511650://vk.ru/blank.html"),
 		VKLegacyMobileRedirectURI: getEnv("VK_REDIRECT_URI_MOBILE", "inbetwin://vk-callback"),
+		VKAllowUserTokenImport:    strings.EqualFold(getEnv("VK_ALLOW_USER_TOKEN_IMPORT", "true"), "true"),
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 

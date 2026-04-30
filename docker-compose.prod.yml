@@ -34,7 +34,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME:-auth_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -167,6 +167,7 @@ services:
       VK_APP_ID_IOS: ${VK_APP_ID_IOS}
       VK_APP_SECRET_IOS: ${VK_APP_SECRET_IOS}
       VK_REDIRECT_URI_IOS: ${VK_REDIRECT_URI_IOS}
+      VK_ALLOW_USER_TOKEN_IMPORT: ${VK_ALLOW_USER_TOKEN_IMPORT:-true}
       FRONTEND_URL: ${FRONTEND_URL:-https://${DOMAIN}}
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       LLM_API_KEY: ${LLM_API_KEY}
@@ -295,7 +296,10 @@ services:
       GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL_CALENDAR:-https://${DOMAIN}/api/v1/llm/google/callback}
       AMOCRM_CLIENT_ID: ${AMOCRM_CLIENT_ID}
       AMOCRM_CLIENT_SECRET: ${AMOCRM_CLIENT_SECRET}
-      AMOCRM_REDIRECT_URL: ${AMOCRM_REDIRECT_URL:-https://${DOMAIN}/llm/amocrm/callback}
+      AMOCRM_REDIRECT_URL: ${AMOCRM_REDIRECT_URL:-https://${DOMAIN}/api/v1/llm/amocrm/callback}
+      ZOHO_CLIENT_ID: ${ZOHO_CLIENT_ID:-}
+      ZOHO_CLIENT_SECRET: ${ZOHO_CLIENT_SECRET:-}
+      ZOHO_REDIRECT_URL: ${ZOHO_REDIRECT_URL:-https://${DOMAIN}/api/v1/llm/zoho/callback}
     depends_on:
       postgres:
         condition: service_healthy

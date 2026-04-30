@@ -1,0 +1,314 @@
+.app-demo-section {
+  padding: 120px 0;
+  position: relative;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.demo-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 64px;
+}
+
+.demo-text {
+  flex: 1;
+  max-width: 500px;
+}
+
+.section-sub-left {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  line-height: 1.7;
+  margin-bottom: 32px;
+}
+
+.section-sub-left strong {
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+.demo-features-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.demo-features-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.95rem;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.demo-features-list li svg {
+  color: var(--accent-secondary);
+}
+
+.demo-device-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.device-glow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 120%;
+  height: 120%;
+  background: radial-gradient(circle, rgba(176, 38, 255, 0.2) 0%, rgba(0, 255, 255, 0.1) 40%, transparent 70%);
+  z-index: 0;
+  pointer-events: none;
+  filter: blur(40px);
+}
+
+.iphone-mockup {
+  position: relative;
+  z-index: 1;
+  width: 320px;
+  height: 650px;
+  border-radius: 44px;
+  padding: 12px;
+  border: 4px solid #1a1c29;
+  background: #030514;
+  box-shadow: 
+    0 25px 50px -12px rgba(0, 0, 0, 0.8),
+    inset 0 0 20px rgba(176, 38, 255, 0.1);
+  overflow: hidden;
+}
+
+.iphone-notch {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 120px;
+  height: 28px;
+  background: #1a1c29;
+  border-radius: 0 0 16px 16px;
+  z-index: 100;
+}
+
+.iphone-screen {
+  position: absolute;
+  top: 12px; left: 12px; right: 12px; bottom: 12px;
+  border-radius: 32px;
+  overflow: hidden;
+  background: #060814;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Chat Screen */
+.chat-screen {
+  background: linear-gradient(135deg, #0b0f24 0%, #050610 100%);
+}
+
+.chat-header {
+  padding: 40px 20px 16px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.95rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(11, 15, 36, 0.8);
+  backdrop-filter: blur(10px);
+}
+
+.chat-body {
+  flex: 1;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.msg {
+  padding: 12px 16px;
+  border-radius: 18px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  max-width: 85%;
+  position: relative;
+}
+
+.msg-user {
+  align-self: flex-end;
+  background: var(--surface-hover);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.msg-agent {
+  align-self: flex-start;
+  background: linear-gradient(135deg, rgba(176, 38, 255, 0.2) 0%, rgba(0, 255, 255, 0.1) 100%);
+  border: 1px solid rgba(176, 38, 255, 0.3);
+  color: #fff;
+  border-bottom-left-radius: 4px;
+}
+
+.msg-agent.typing {
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  background: #fff;
+  border-radius: 50%;
+  opacity: 0;
+  animation: typing 1.4s infinite ease-in-out;
+}
+.dot:nth-child(1) { animation-delay: 0s; }
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing {
+  0%, 100% { opacity: 0.2; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+.msg-action-btn {
+  margin-top: 12px;
+  padding: 10px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(0, 255, 255, 0.4);
+  color: var(--accent-secondary);
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.fake-cursor {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 200;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+  animation: cursorPulse 1s infinite alternate;
+}
+
+@keyframes cursorPulse {
+  to { transform: scale(0.8); background: rgba(0, 255, 255, 0.8); }
+}
+
+/* Dashboard Screen */
+.dashboard-screen {
+  padding: 40px 16px 16px;
+}
+
+.dash-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+
+.dash-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dash-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 16px;
+  border-radius: 16px;
+}
+
+.dash-title {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.dash-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.trend-up {
+  font-size: 0.75rem;
+  color: #00ff88;
+  background: rgba(0, 255, 136, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.dash-chart-placeholder {
+  height: 100px;
+  margin-top: 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.dash-chart-bar {
+  width: 14%;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px 4px 0 0;
+  transition: all 0.3s;
+}
+
+.dash-log {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.log-item {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.status-green {
+  width: 6px; height: 6px; border-radius: 50%; background: #00ff88; box-shadow: 0 0 5px #00ff88;
+}
+.status-blue {
+  width: 6px; height: 6px; border-radius: 50%; background: #00ffff; box-shadow: 0 0 5px #00ffff;
+}
+
+@media (max-width: 900px) {
+  .demo-container {
+    flex-direction: column;
+    text-align: center;
+  }
+  .demo-text {
+    max-width: 100%;
+  }
+  .section-sub-left {
+    margin: 0 auto 32px;
+  }
+}

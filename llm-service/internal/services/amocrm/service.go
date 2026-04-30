@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,8 +18,9 @@ import (
 )
 
 const (
-	oauthBaseURL    = "https://www.kommo.com/oauth"
-	cacheTTL        = 5 * time.Minute
+	oauthBaseURL     = "https://www.amocrm.ru/oauth"
+	accountDomain    = "amocrm.ru"
+	cacheTTL         = 5 * time.Minute
 	maxRetryAttempts = 3
 )
 
@@ -36,7 +39,7 @@ type Service struct {
 }
 
 type cachedToken struct {
-	subdomain   string
+	accountHost string
 	accessToken string
 	expiresAt   time.Time
 }
@@ -86,8 +89,8 @@ type TaskResult struct {
 }
 
 type NoteResult struct {
-	ID     int64  `json:"id"`
-	LeadID int64  `json:"lead_id"`
+	ID     int64 `json:"id"`
+	LeadID int64 `json:"lead_id"`
 }
 
 type Pipeline struct {
@@ -115,34 +118,84 @@ func NewService(db *database.DB, clientID, clientSecret, redirectURL string) *Se
 	}
 }
 
+func normalizeHost(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, "://") {
+		if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
+			value = parsed.Host
+		}
+	} else if strings.Contains(value, "/") {
+		if parsed, err := url.Parse("https://" + value); err == nil && parsed.Host != "" {
+			value = parsed.Host
+		}
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+}
+
+func normalizeAccountHost(referer string) (string, error) {
+	host := normalizeHost(referer)
+	if host == "" {
+		return "", fmt.Errorf("missing account referer")
+	}
+	if strings.Contains(host, ".") {
+		return host, nil
+	}
+	return host + "." + accountDomain, nil
+}
+
+func normalizeStoredAccountHost(value string) string {
+	host, err := normalizeAccountHost(value)
+	if err != nil {
+		return value
+	}
+	return host
+}
+
+func (s *Service) accountURL(accountHost, path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return "https://" + accountHost + path
+}
+
 // ── OAuth helpers ─────────────────────────────────────────────────────────────
 
-// GetAuthURL returns the Kommo OAuth consent URL.
+// GetAuthURL returns the amoCRM OAuth consent URL.
 // state encodes the workspaceID so we can store the token after callback.
 func (s *Service) GetAuthURL(workspaceID uuid.UUID) string {
-	return fmt.Sprintf(
-		"%s?client_id=%s&state=%s&redirect_uri=%s&response_type=code&mode=post_message",
-		oauthBaseURL, s.clientID, workspaceID.String(), s.redirectURL,
-	)
+	authURL, err := url.Parse(oauthBaseURL)
+	if err != nil {
+		return ""
+	}
+	q := authURL.Query()
+	q.Set("client_id", s.clientID)
+	q.Set("state", workspaceID.String())
+	q.Set("mode", "post_message")
+	authURL.RawQuery = q.Encode()
+	return authURL.String()
 }
 
 // HandleCallback exchanges the code for tokens and stores the integration.
-// subdomain comes from the "referer" query param that Kommo appends to the callback URL.
-func (s *Service) HandleCallback(ctx context.Context, code, state, subdomain string) (*models.AmoCRMIntegration, error) {
-	if subdomain == "" {
-		return nil, fmt.Errorf("missing subdomain (referer param)")
+// referer comes from the "referer" query param that amoCRM appends to the callback URL.
+func (s *Service) HandleCallback(ctx context.Context, code, state, referer string) (*models.AmoCRMIntegration, error) {
+	accountHost, err := normalizeAccountHost(referer)
+	if err != nil {
+		return nil, err
 	}
 	workspaceID, err := uuid.Parse(state)
 	if err != nil {
 		return nil, fmt.Errorf("invalid state: %w", err)
 	}
 
-	tok, err := s.exchangeCode(ctx, subdomain, code)
+	tok, err := s.exchangeCode(ctx, accountHost, code)
 	if err != nil {
 		return nil, fmt.Errorf("exchange code: %w", err)
 	}
 
-	accountID, email := s.fetchAccountInfo(ctx, subdomain, tok.AccessToken)
+	accountID, email := s.fetchAccountInfo(ctx, accountHost, tok.AccessToken)
 	expiry := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
 
 	integration := &models.AmoCRMIntegration{}
@@ -160,7 +213,7 @@ func (s *Service) HandleCallback(ctx context.Context, code, state, subdomain str
 			is_active=true,
 			updated_at=NOW()
 		RETURNING id, workspace_id, subdomain, account_id, email, is_active, token_expiry, created_at, updated_at`,
-		workspaceID, subdomain, tok.AccessToken, tok.RefreshToken, expiry, accountID, email,
+		workspaceID, accountHost, tok.AccessToken, tok.RefreshToken, expiry, accountID, email,
 	).Scan(&integration.ID, &integration.WorkspaceID, &integration.Subdomain,
 		&integration.AccountID, &integration.Email, &integration.IsActive,
 		&integration.TokenExpiry, &integration.CreatedAt, &integration.UpdatedAt)
@@ -169,7 +222,7 @@ func (s *Service) HandleCallback(ctx context.Context, code, state, subdomain str
 	}
 
 	// Warm the cache with the freshly-issued token
-	s.setCachedToken(workspaceID, subdomain, tok.AccessToken, expiry)
+	s.setCachedToken(workspaceID, accountHost, tok.AccessToken, expiry)
 	return integration, nil
 }
 
@@ -185,17 +238,17 @@ func (s *Service) GetIntegration(ctx context.Context, workspaceID uuid.UUID) (*m
 
 // ── Token cache helpers ───────────────────────────────────────────────────────
 
-func (s *Service) getCachedToken(workspaceID uuid.UUID) (subdomain, accessToken string, ok bool) {
+func (s *Service) getCachedToken(workspaceID uuid.UUID) (accountHost, accessToken string, ok bool) {
 	s.tokenMu.RLock()
 	defer s.tokenMu.RUnlock()
 	c, found := s.tokenCache[workspaceID]
 	if !found || time.Now().After(c.expiresAt) {
 		return "", "", false
 	}
-	return c.subdomain, c.accessToken, true
+	return c.accountHost, c.accessToken, true
 }
 
-func (s *Service) setCachedToken(workspaceID uuid.UUID, subdomain, accessToken string, tokenExpiry time.Time) {
+func (s *Service) setCachedToken(workspaceID uuid.UUID, accountHost, accessToken string, tokenExpiry time.Time) {
 	// Cache until min(tokenExpiry - 5min, now + cacheTTL)
 	cacheExp := time.Now().Add(cacheTTL)
 	naturalExp := tokenExpiry.Add(-5 * time.Minute)
@@ -209,7 +262,7 @@ func (s *Service) setCachedToken(workspaceID uuid.UUID, subdomain, accessToken s
 	s.tokenMu.Lock()
 	defer s.tokenMu.Unlock()
 	s.tokenCache[workspaceID] = cachedToken{
-		subdomain:   subdomain,
+		accountHost: accountHost,
 		accessToken: accessToken,
 		expiresAt:   cacheExp,
 	}
@@ -223,10 +276,10 @@ func (s *Service) invalidateCachedToken(workspaceID uuid.UUID) {
 
 // ── Token management ──────────────────────────────────────────────────────────
 
-func (s *Service) getAccessToken(ctx context.Context, workspaceID uuid.UUID) (subdomain, accessToken string, err error) {
+func (s *Service) getAccessToken(ctx context.Context, workspaceID uuid.UUID) (accountHost, accessToken string, err error) {
 	// Fast path: serve from cache
-	if sd, tok, ok := s.getCachedToken(workspaceID); ok {
-		return sd, tok, nil
+	if host, tok, ok := s.getCachedToken(workspaceID); ok {
+		return host, tok, nil
 	}
 
 	// Slow path: query DB
@@ -235,14 +288,15 @@ func (s *Service) getAccessToken(ctx context.Context, workspaceID uuid.UUID) (su
 	err = s.db.QueryRowContext(ctx,
 		`SELECT subdomain, access_token, refresh_token, token_expiry
 		 FROM amocrm_integrations WHERE workspace_id=$1 AND is_active=true`,
-		workspaceID).Scan(&subdomain, &accessToken, &refreshToken, &expiry)
+		workspaceID).Scan(&accountHost, &accessToken, &refreshToken, &expiry)
 	if err != nil {
 		return "", "", fmt.Errorf("no amocrm integration: %w", err)
 	}
+	accountHost = normalizeStoredAccountHost(accountHost)
 
 	// Refresh if token expires within 5 minutes
 	if time.Until(expiry) < 5*time.Minute {
-		tok, rerr := s.refreshToken(ctx, subdomain, refreshToken)
+		tok, rerr := s.refreshToken(ctx, accountHost, refreshToken)
 		if rerr == nil {
 			newExpiry := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
 			_, _ = s.db.ExecContext(ctx,
@@ -255,11 +309,11 @@ func (s *Service) getAccessToken(ctx context.Context, workspaceID uuid.UUID) (su
 		// If refresh fails, continue with the old token — it may still be valid.
 	}
 
-	s.setCachedToken(workspaceID, subdomain, accessToken, expiry)
-	return subdomain, accessToken, nil
+	s.setCachedToken(workspaceID, accountHost, accessToken, expiry)
+	return accountHost, accessToken, nil
 }
 
-func (s *Service) exchangeCode(ctx context.Context, subdomain, code string) (*tokenResponse, error) {
+func (s *Service) exchangeCode(ctx context.Context, accountHost, code string) (*tokenResponse, error) {
 	body, _ := json.Marshal(map[string]string{
 		"client_id":     s.clientID,
 		"client_secret": s.clientSecret,
@@ -267,10 +321,10 @@ func (s *Service) exchangeCode(ctx context.Context, subdomain, code string) (*to
 		"code":          code,
 		"redirect_uri":  s.redirectURL,
 	})
-	return s.doTokenRequest(ctx, subdomain, body)
+	return s.doTokenRequest(ctx, accountHost, body)
 }
 
-func (s *Service) refreshToken(ctx context.Context, subdomain, refreshToken string) (*tokenResponse, error) {
+func (s *Service) refreshToken(ctx context.Context, accountHost, refreshToken string) (*tokenResponse, error) {
 	body, _ := json.Marshal(map[string]string{
 		"client_id":     s.clientID,
 		"client_secret": s.clientSecret,
@@ -278,12 +332,11 @@ func (s *Service) refreshToken(ctx context.Context, subdomain, refreshToken stri
 		"refresh_token": refreshToken,
 		"redirect_uri":  s.redirectURL,
 	})
-	return s.doTokenRequest(ctx, subdomain, body)
+	return s.doTokenRequest(ctx, accountHost, body)
 }
 
-func (s *Service) doTokenRequest(ctx context.Context, subdomain string, body []byte) (*tokenResponse, error) {
-	url := fmt.Sprintf("https://%s.kommo.com/oauth2/access_token", subdomain)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+func (s *Service) doTokenRequest(ctx context.Context, accountHost string, body []byte) (*tokenResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.accountURL(accountHost, "/oauth2/access_token"), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -301,9 +354,8 @@ func (s *Service) doTokenRequest(ctx context.Context, subdomain string, body []b
 	return &tok, json.NewDecoder(resp.Body).Decode(&tok)
 }
 
-func (s *Service) fetchAccountInfo(ctx context.Context, subdomain, accessToken string) (accountID int64, email string) {
-	url := fmt.Sprintf("https://%s.kommo.com/api/v4/account", subdomain)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (s *Service) fetchAccountInfo(ctx context.Context, accountHost, accessToken string) (accountID int64, email string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.accountURL(accountHost, "/api/v4/account"), nil)
 	if err != nil {
 		return 0, ""
 	}
@@ -325,12 +377,12 @@ func (s *Service) fetchAccountInfo(ctx context.Context, subdomain, accessToken s
 // GetPipelines returns all sales pipelines with their statuses (stages).
 // The agent should call this before CreateLead to pick the right pipeline_id.
 func (s *Service) GetPipelines(ctx context.Context, workspaceID uuid.UUID) ([]Pipeline, error) {
-	subdomain, token, err := s.getAccessToken(ctx, workspaceID)
+	accountHost, token, err := s.getAccessToken(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 
-	url := fmt.Sprintf("https://%s.kommo.com/api/v4/leads/pipelines?with=statuses", subdomain)
+	url := s.accountURL(accountHost, "/api/v4/leads/pipelines?with=statuses")
 	var respBody []byte
 	if err := withRetry(ctx, maxRetryAttempts, func() error {
 		var e error
@@ -372,7 +424,7 @@ func (s *Service) GetPipelines(ctx context.Context, workspaceID uuid.UUID) ([]Pi
 
 // CreateLead creates a lead (and optionally a linked contact) in AmoCRM.
 func (s *Service) CreateLead(ctx context.Context, workspaceID uuid.UUID, params CreateLeadParams) (*LeadResult, error) {
-	subdomain, token, err := s.getAccessToken(ctx, workspaceID)
+	accountHost, token, err := s.getAccessToken(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +464,7 @@ func (s *Service) CreateLead(ctx context.Context, workspaceID uuid.UUID, params 
 	}
 
 	body, _ := json.Marshal([]complexLead{lead})
-	url := fmt.Sprintf("https://%s.kommo.com/api/v4/leads/complex", subdomain)
+	url := s.accountURL(accountHost, "/api/v4/leads/complex")
 
 	var respBody []byte
 	if err := withRetry(ctx, maxRetryAttempts, func() error {
@@ -433,7 +485,7 @@ func (s *Service) CreateLead(ctx context.Context, workspaceID uuid.UUID, params 
 	leadResult := &LeadResult{
 		ID:   resp[0].ID,
 		Name: params.Name,
-		URL:  fmt.Sprintf("https://%s.kommo.com/leads/detail/%d", subdomain, resp[0].ID),
+		URL:  s.accountURL(accountHost, fmt.Sprintf("/leads/detail/%d", resp[0].ID)),
 	}
 
 	// If caller provided notes, attach them immediately
@@ -446,7 +498,7 @@ func (s *Service) CreateLead(ctx context.Context, workspaceID uuid.UUID, params 
 
 // CreateTask creates a task in AmoCRM, optionally linked to a lead.
 func (s *Service) CreateTask(ctx context.Context, workspaceID uuid.UUID, params CreateTaskParams) (*TaskResult, error) {
-	subdomain, token, err := s.getAccessToken(ctx, workspaceID)
+	accountHost, token, err := s.getAccessToken(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +524,7 @@ func (s *Service) CreateTask(ctx context.Context, workspaceID uuid.UUID, params 
 	}
 
 	body, _ := json.Marshal([]any{task})
-	url := fmt.Sprintf("https://%s.kommo.com/api/v4/tasks", subdomain)
+	url := s.accountURL(accountHost, "/api/v4/tasks")
 
 	var respBody []byte
 	if err := withRetry(ctx, maxRetryAttempts, func() error {
@@ -498,7 +550,7 @@ func (s *Service) CreateTask(ctx context.Context, workspaceID uuid.UUID, params 
 
 // AddNote adds a text note to an existing lead in AmoCRM.
 func (s *Service) AddNote(ctx context.Context, workspaceID uuid.UUID, params AddNoteParams) (*NoteResult, error) {
-	subdomain, token, err := s.getAccessToken(ctx, workspaceID)
+	accountHost, token, err := s.getAccessToken(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +565,7 @@ func (s *Service) AddNote(ctx context.Context, workspaceID uuid.UUID, params Add
 	}
 
 	body, _ := json.Marshal([]any{note})
-	url := fmt.Sprintf("https://%s.kommo.com/api/v4/notes", subdomain)
+	url := s.accountURL(accountHost, "/api/v4/notes")
 
 	var respBody []byte
 	if err := withRetry(ctx, maxRetryAttempts, func() error {
