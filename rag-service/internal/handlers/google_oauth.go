@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"log"
+
 	"github.com/dinarasaurae/inbetwin-rag-service/internal/services"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
@@ -45,13 +47,16 @@ func (h *GoogleOAuthHandler) Callback(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing code or state"})
 	}
 
+	log.Printf("[google] callback: state=%s code_len=%d", state, len(code))
 	if err := h.svc.ExchangeCode(c.Context(), code, state); err != nil {
+		log.Printf("[google] ExchangeCode error: %v", err)
 		return c.Status(fiber.StatusBadRequest).SendString(`<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ошибка</title></head><body style="font-family:sans-serif;text-align:center;padding:40px">
 <h2>⚠️ Ошибка подключения</h2><p>` + err.Error() + `</p>
 <p>Вернитесь в приложение и попробуйте снова.</p></body></html>`)
 	}
+	log.Printf("[google] token saved for state=%s", state)
 
 	// Show success page — browser can't open inbetwin:// deep-link directly
 	c.Set("Content-Type", "text/html; charset=utf-8")
@@ -59,8 +64,8 @@ func (h *GoogleOAuthHandler) Callback(c fiber.Ctx) error {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Google Sheets подключён</title>
 <script>
-  // Try to open deep-link, fall back gracefully
-  window.location.href = "inbetwin://google-callback?connected=1";
+  // Open the app via the registered inbetwin://oauth host (inbetwin://google-callback is NOT registered)
+  window.location.href = "inbetwin://oauth/google/success";
   setTimeout(function(){ document.getElementById('msg').style.display='block'; }, 1500);
 </script>
 </head><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fdf4">

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,7 +29,8 @@ func NewScoringClient(url string) *ScoringClient {
 
 type scoringRequest struct {
 	WorkspaceID string `json:"workspace_id"`
-	ChatUserID  string `json:"chat_user_id"`
+	LeadID      string `json:"lead_id"`
+	ChatUserID  string `json:"chat_user_id,omitempty"`
 	Platform    string `json:"platform"`
 	Message     string `json:"message"`
 }
@@ -47,16 +49,19 @@ func (c *ScoringClient) ScoreMessage(ctx context.Context, workspaceID uuid.UUID,
 	}
 	payload, _ := json.Marshal(scoringRequest{
 		WorkspaceID: workspaceID.String(),
+		LeadID:      chatUserID,
 		ChatUserID:  chatUserID,
 		Platform:    platform,
 		Message:     message,
 	})
+	baseURL := strings.TrimRight(c.url, "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.url+"/leads/scoring/score", bytes.NewReader(payload))
+		baseURL+"/scoring/score", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", workspaceID.String())
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err

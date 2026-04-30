@@ -35,10 +35,14 @@ type Config struct {
 	AmoCRMClientSecret string
 	AmoCRMRedirectURL  string
 
-	RAGServiceURL        string
-	AgentServiceURL      string
+	ZohoClientID     string
+	ZohoClientSecret string
+	ZohoRedirectURL  string
+
+	RAGServiceURL         string
+	AgentServiceURL       string
 	LeadScoringServiceURL string
-	AuthServiceURL       string
+	AuthServiceURL        string
 
 	HotLeadThreshold  int
 	MaxToolIterations int
@@ -80,10 +84,14 @@ func Load() *Config {
 		AmoCRMClientSecret: getEnv("AMOCRM_CLIENT_SECRET", ""),
 		AmoCRMRedirectURL:  getEnv("AMOCRM_REDIRECT_URL", "http://localhost:3005/llm/amocrm/callback"),
 
-		RAGServiceURL:        getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
-		AgentServiceURL:      getEnv("AGENT_SERVICE_URL", "http://agent-service:3003"),
+		ZohoClientID:     getEnv("ZOHO_CLIENT_ID", ""),
+		ZohoClientSecret: getEnv("ZOHO_CLIENT_SECRET", ""),
+		ZohoRedirectURL:  getEnv("ZOHO_REDIRECT_URL", "http://localhost:3005/llm/zoho/callback"),
+
+		RAGServiceURL:         getEnv("RAG_SERVICE_URL", "http://rag-service:3004"),
+		AgentServiceURL:       getEnv("AGENT_SERVICE_URL", "http://agent-service:3003"),
 		LeadScoringServiceURL: getEnv("LEAD_SCORING_SERVICE_URL", "http://lead-scoring-service:3006"),
-		AuthServiceURL:       getEnv("AUTH_SERVICE_URL", "http://auth-service:3001"),
+		AuthServiceURL:        getEnv("AUTH_SERVICE_URL", "http://auth-service:3001"),
 
 		HotLeadThreshold:  func() int { v, _ := strconv.Atoi(getEnv("HOT_LEAD_THRESHOLD", "80")); return v }(),
 		MaxToolIterations: maxIter,

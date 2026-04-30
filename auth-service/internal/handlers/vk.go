@@ -11,6 +11,7 @@ import (
 	"github.com/dinarasaurae/inbetwin-auth-service/internal/services"
 	jwtlib "github.com/dinarasaurae/inbetwin-shared/jwt-go"
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 )
 
 type VKAuthHandler struct {
@@ -58,8 +59,16 @@ func (h *VKAuthHandler) LoginWithVK(c fiber.Ctx) error {
 		return c.Status(401).JSON(jwtlib.NewErrorResponse("invalid_token", err.Error()))
 	}
 
+	preferredUserID := h.extractPreferredUserID(c)
+
 	// Find or create user
-	access, refresh, err := h.svc.LoginWithVKOAuth(vkUser.ID, vkUser.FirstName, vkUser.LastName, req.AccessToken)
+	access, refresh, err := h.svc.LoginWithVKOAuth(
+		vkUser.ID,
+		vkUser.FirstName,
+		vkUser.LastName,
+		req.AccessToken,
+		preferredUserID,
+	)
 	if err != nil {
 		return c.Status(500).JSON(jwtlib.NewErrorResponse("auth_failed", err.Error()))
 	}
@@ -67,6 +76,21 @@ func (h *VKAuthHandler) LoginWithVK(c fiber.Ctx) error {
 	return c.JSON(jwtlib.NewAuthResponse(
 		access, refresh, h.jwtService.GetAccessTokenExpiration(),
 		nil, "vk_login_success"))
+}
+
+func (h *VKAuthHandler) extractPreferredUserID(c fiber.Ctx) *uuid.UUID {
+	token, err := jwtlib.ExtractTokenFromHeader(c.Get("Authorization"))
+	if err != nil {
+		return nil
+	}
+
+	claims, err := h.jwtService.ValidateAccessToken(token)
+	if err != nil {
+		return nil
+	}
+
+	userID := claims.UserID
+	return &userID
 }
 
 type vkUserInfo struct {

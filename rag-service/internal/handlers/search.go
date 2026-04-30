@@ -24,5 +24,9 @@ func (h *SearchHandler) Search(c fiber.Ctx) error {
 	if results == nil {
 		results = []services.SearchResult{}
 	}
-	return c.JSON(fiber.Map{"results": results, "count": len(results)})
+	return c.JSON(fiber.Map{
+		"results": results,
+		"count":   len(results),
+		"total":   len(results),
+	})
 }

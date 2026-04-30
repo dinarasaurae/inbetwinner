@@ -46,6 +46,13 @@ func main() {
 	api.Get("/leads/:leadID", scoringHandler.GetScore)
 	api.Get("/leads/:leadID/signals", scoringHandler.GetSignals)
 
+	// Gateway strips /api/v1 and forwards as /leads/* — provide the same routes
+	// at the root /leads prefix so the API Gateway's proxy works correctly.
+	gatewayLeads := app.Group("/leads", middleware.WorkspaceAuth)
+	gatewayLeads.Get("", scoringHandler.ListScores)
+	gatewayLeads.Get("/:leadID", scoringHandler.GetScore)
+	gatewayLeads.Get("/:leadID/signals", scoringHandler.GetSignals)
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 

@@ -28,7 +28,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-auth_user}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-auth_user} -d ${DB_NAME:-auth_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -166,6 +166,7 @@ services:
       VK_APP_ID_IOS: ${VK_APP_ID_IOS:-54511650}
       VK_APP_SECRET_IOS: ${VK_APP_SECRET_IOS:-}
       VK_REDIRECT_URI_IOS: ${VK_REDIRECT_URI_IOS:-vk54511650://vk.ru/blank.html}
+      VK_ALLOW_USER_TOKEN_IMPORT: ${VK_ALLOW_USER_TOKEN_IMPORT:-true}
 
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
@@ -354,6 +355,9 @@ services:
       AMOCRM_CLIENT_ID: ${AMOCRM_CLIENT_ID:-}
       AMOCRM_CLIENT_SECRET: ${AMOCRM_CLIENT_SECRET:-}
       AMOCRM_REDIRECT_URL: ${AMOCRM_REDIRECT_URL:-http://localhost:3005/llm/amocrm/callback}
+      ZOHO_CLIENT_ID: ${ZOHO_CLIENT_ID:-}
+      ZOHO_CLIENT_SECRET: ${ZOHO_CLIENT_SECRET:-}
+      ZOHO_REDIRECT_URL: ${ZOHO_REDIRECT_URL:-http://localhost:8080/api/v1/llm/zoho/callback}
 
     ports:
       - "3005:3005"

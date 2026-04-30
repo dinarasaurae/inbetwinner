@@ -16,13 +16,18 @@ import (
 
 // VKHandler handles VK integration HTTP routes.
 type VKHandler struct {
-	svc     *services.VKService
-	frontendURL string
+	svc                  *services.VKService
+	frontendURL          string
+	allowUserTokenImport bool
 }
 
 // NewVKHandler creates a new VKHandler.
-func NewVKHandler(svc *services.VKService, frontendURL string) *VKHandler {
-	return &VKHandler{svc: svc, frontendURL: frontendURL}
+func NewVKHandler(svc *services.VKService, frontendURL string, allowUserTokenImport bool) *VKHandler {
+	return &VKHandler{
+		svc:                  svc,
+		frontendURL:          frontendURL,
+		allowUserTokenImport: allowUserTokenImport,
+	}
 }
 
 // ─── User OAuth ───────────────────────────────────────────────────────────────
@@ -49,6 +54,40 @@ func (h *VKHandler) UserOAuthStart(c fiber.Ctx) error {
 		Platform:     platform,
 		ImplicitFlow: implicit,
 	}))
+}
+
+// UserOAuthImport handles POST /social/vk/oauth/user/import
+// Called by the mobile app right after app login so social-service can reuse
+// the already-issued VK token for step 1 of the VK connect wizard.
+func (h *VKHandler) UserOAuthImport(c fiber.Ctx) error {
+	if !h.allowUserTokenImport {
+		// Preserve the pre-import-route behaviour so older mobile builds fall
+		// back to /oauth/user/start -> /oauth/user/exchange automatically.
+		return fiber.NewError(fiber.StatusNotFound, "Cannot POST /social/vk/oauth/user/import")
+	}
+
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	var req models.VKUserOAuthImportRequest
+	if err := c.Bind().JSON(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			jwtlib.NewErrorResponse("invalid_request", err.Error()))
+	}
+	if strings.TrimSpace(req.AccessToken) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			jwtlib.NewErrorResponse("invalid_request", "access_token is required"))
+	}
+	req.Platform = normalisePlatform(req.Platform)
+
+	conn, err := h.svc.UserOAuthImport(c.Context(), userID, req)
+	if err != nil {
+		return mapVKError(c, err)
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(jwtlib.NewSuccessResponse("vk_user_connected", conn))
 }
 
 // UserOAuthExchange handles POST /social/vk/oauth/user/exchange
@@ -162,12 +201,12 @@ func (h *VKHandler) OAuthExchange(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(
 			jwtlib.NewErrorResponse("invalid_request", err.Error()))
 	}
-	if req.Code == "" || req.State == "" {
+	if req.State == "" || (req.Code == "" && strings.TrimSpace(req.AccessToken) == "") {
 		return c.Status(fiber.StatusBadRequest).JSON(
-			jwtlib.NewErrorResponse("invalid_request", "code and state are required"))
+			jwtlib.NewErrorResponse("invalid_request", "state and either code or access_token are required"))
 	}
 
-	integ, err := h.svc.OAuthExchange(c.Context(), req.Code, req.State)
+	integ, err := h.svc.OAuthExchange(c.Context(), req.Code, req.State, strings.TrimSpace(req.AccessToken))
 	if err != nil {
 		return mapVKError(c, err)
 	}
@@ -176,7 +215,9 @@ func (h *VKHandler) OAuthExchange(c fiber.Ctx) error {
 }
 
 // OAuthCallback handles GET /social/vk/oauth/callback   (PUBLIC — no JWT)
-// VK redirects the user's browser here after web group OAuth.
+// VK redirects the browser here for both community OAuth and the legacy mobile
+// user OAuth flow when android/ios reuse the community callback to avoid
+// oauth.vk.com Security Error.
 func (h *VKHandler) OAuthCallback(c fiber.Ctx) error {
 	code := c.Query("code")
 	state := c.Query("state")
@@ -185,10 +226,24 @@ func (h *VKHandler) OAuthCallback(c fiber.Ctx) error {
 
 	if errParam != "" {
 		desc := c.Query("error_description")
+		if h.svc.IsUserOAuthState(state) {
+			return c.Redirect().To(userOAuthReturnURL(platform, state, "", desc, h.frontendURL))
+		}
 		return c.Redirect().To(groupOAuthErrorReturnURL(platform, state, desc, h.frontendURL))
 	}
 	if code == "" || state == "" {
+		if h.svc.IsUserOAuthState(state) {
+			return c.Redirect().To(userOAuthReturnURL(platform, state, "", "missing_params", h.frontendURL))
+		}
 		return c.Redirect().To(groupOAuthErrorReturnURL(platform, state, "missing_params", h.frontendURL))
+	}
+
+	if h.svc.IsUserOAuthState(state) {
+		_, err := h.svc.UserOAuthCallback(c.Context(), code, state, "")
+		if err != nil {
+			return c.Redirect().To(userOAuthReturnURL(platform, state, "", err.Error(), h.frontendURL))
+		}
+		return c.Redirect().To(userOAuthReturnURL(platform, state, "1", "", h.frontendURL))
 	}
 
 	integ, platform, err := h.svc.OAuthCallback(c.Context(), code, state)

@@ -55,7 +55,7 @@ func main() {
 	vkSvc := services.NewVKService(db, enc, cfg)
 	go vkSvc.StartAllWorkers(context.Background())
 
-	vkHandler := handlers.NewVKHandler(vkSvc, cfg.FrontendURL)
+	vkHandler := handlers.NewVKHandler(vkSvc, cfg.FrontendURL, cfg.VKAllowUserTokenImport)
 
 	if cfg.TelegramBotToken != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -157,6 +157,7 @@ func main() {
 	vk.Get("/oauth/user/start", vkHandler.UserOAuthStart)
 	vk.Get("/oauth/user/legacy/start", vkHandler.UserLegacyOAuthStart)
 	vk.Post("/oauth/user/exchange", vkHandler.UserOAuthExchange) // mobile only
+	vk.Post("/oauth/user/import", vkHandler.UserOAuthImport)     // mobile: native SDK token → store
 
 	// Step 2 — group OAuth (community token)
 	vk.Get("/oauth/start", vkHandler.OAuthStart)

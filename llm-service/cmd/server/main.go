@@ -18,11 +18,12 @@ import (
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/database"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/handlers"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/middleware"
+	"github.com/dinarasaurae/inbetwin-llm-service/internal/services"
 	agentsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/agent"
 	amocrmSvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/amocrm"
 	calendarsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/calendar"
+	zohosvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/zoho"
 	histsvc "github.com/dinarasaurae/inbetwin-llm-service/internal/services/history"
-	"github.com/dinarasaurae/inbetwin-llm-service/internal/services"
 	"github.com/dinarasaurae/inbetwin-llm-service/internal/services/tools"
 )
 
@@ -41,8 +42,9 @@ func main() {
 	histService := histsvc.NewService(db)
 	calService := calendarsvc.NewService(db, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
 	amoCRMService := amocrmSvc.NewService(db, cfg.AmoCRMClientID, cfg.AmoCRMClientSecret, cfg.AmoCRMRedirectURL)
+	zohoService := zohosvc.NewService(db, cfg.ZohoClientID, cfg.ZohoClientSecret, cfg.ZohoRedirectURL)
 	registry := tools.NewRegistry(db)
-	builtinH := tools.NewBuiltinHandler(calService, amoCRMService, db)
+	builtinH := tools.NewBuiltinHandler(calService, amoCRMService, zohoService, db)
 	dispatcher := tools.NewDispatcher(db, builtinH, registry)
 	agentClient := agentsvc.NewClient(cfg.AgentServiceURL)
 	llmService := services.NewLLMService(cfg, histService, registry, dispatcher, agentClient)
@@ -52,6 +54,7 @@ func main() {
 	toolH := handlers.NewToolHandler(toolService)
 	calH := handlers.NewCalendarHandler(calService)
 	amoCRMH := handlers.NewAmoCRMHandler(amoCRMService)
+	zohoH := handlers.NewZohoHandler(zohoService)
 	socialH := handlers.NewSocialHandler(llmService)
 
 	app := fiber.New(fiber.Config{
@@ -69,8 +72,10 @@ func main() {
 	app.Get("/health", handlers.HealthCheck)
 	// Google OAuth callback is public — Google redirects the browser here
 	app.Get("/llm/google/callback", calH.Callback)
-	// AmoCRM (Kommo) OAuth callback is public — Kommo redirects the browser here
+	// amoCRM OAuth callback is public — amoCRM redirects the browser here
 	app.Get("/llm/amocrm/callback", amoCRMH.Callback)
+	// Zoho CRM OAuth callback is public — Zoho redirects the browser here
+	app.Get("/llm/zoho/callback", zohoH.Callback)
 
 	llm := app.Group("/llm", middleware.WorkspaceAuth())
 	llm.Post("/chat", chatH.Chat)
@@ -88,6 +93,9 @@ func main() {
 	llm.Get("/amocrm/auth-url", amoCRMH.GetAuthURL)
 	llm.Get("/amocrm/status", amoCRMH.GetStatus)
 	llm.Get("/amocrm/pipelines", amoCRMH.GetPipelines)
+	llm.Get("/zoho/auth-url", zohoH.GetAuthURL)
+	llm.Get("/zoho/status", zohoH.GetStatus)
+	llm.Get("/zoho/deal-stages", zohoH.GetDealStages)
 	// Social-service orchestration endpoint — not a generic chat endpoint.
 	llm.Post("/social/vk/process", socialH.ProcessVK)
 

@@ -150,6 +150,13 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, error) {
 		return "", errors.New("invalid refresh token")
 	}
 
+	var email, subscriptionPlan string
+	err = s.db.QueryRow("SELECT email, subscription_plan FROM users WHERE id = $1",
+		claims.UserID).Scan(&email, &subscriptionPlan)
+	if err != nil {
+		return "", err
+	}
+
 	tokenHash := s.jwtService.HashToken(refreshToken)
 	var exists bool
 	err = s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM refresh_tokens WHERE token_hash = $1 AND user_id = $2)",
@@ -158,14 +165,11 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, error) {
 		return "", err
 	}
 	if !exists {
-		return "", errors.New("refresh token not found")
-	}
-
-	var email, subscriptionPlan string
-	err = s.db.QueryRow("SELECT email, subscription_plan FROM users WHERE id = $1",
-		claims.UserID).Scan(&email, &subscriptionPlan)
-	if err != nil {
-		return "", err
+		// Recover valid refresh tokens after auth DB resets or OAuth relinking, where
+		// the signed JWT is still valid but its hash row was lost.
+		if err := s.saveRefreshToken(claims.UserID, refreshToken, "recovered-refresh"); err != nil {
+			return "", err
+		}
 	}
 
 	accessToken, err := s.jwtService.GenerateAccessToken(claims.UserID, email, subscriptionPlan)
@@ -295,55 +299,280 @@ func (s *AuthService) saveRefreshToken(userID uuid.UUID, refreshToken, deviceInf
 }
 
 // LoginWithVKOAuth finds or creates a user for the given VK user ID and returns JWT tokens.
-func (s *AuthService) LoginWithVKOAuth(vkUserID int64, firstName, lastName, accessToken string) (string, string, error) {
+func (s *AuthService) LoginWithVKOAuth(vkUserID int64, firstName, lastName, accessToken string, preferredUserID *uuid.UUID) (string, string, error) {
 	providerUserID := fmt.Sprintf("%d", vkUserID)
 	email := fmt.Sprintf("vk_%d@vk.inbetwin.local", vkUserID)
+	firstNamePtr := nullableTrimmedString(firstName)
+	lastNamePtr := nullableTrimmedString(lastName)
+	namePtr := buildDisplayName(firstNamePtr, lastNamePtr)
+	plan := "free"
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	// Try to find existing user via oauth_providers
-	var userID string
-	err := s.db.QueryRow(`
+	var linkedUserID uuid.UUID
+	providerExists := false
+	err = tx.QueryRow(`
 		SELECT user_id FROM oauth_providers
-		WHERE provider = 'vk' AND provider_user_id = $1`, providerUserID).Scan(&userID)
+		WHERE provider = 'vk' AND provider_user_id = $1`, providerUserID).Scan(&linkedUserID)
+	if err != nil && err != sql.ErrNoRows {
+		return "", "", fmt.Errorf("load oauth provider: %w", err)
+	}
+	if err == nil {
+		providerExists = true
+	}
 
-	if err != nil {
-		// Create new user
-		err = s.db.QueryRow(`
-			INSERT INTO users (email, password_hash, first_name, last_name)
-			VALUES ($1, NULL, $2, $3)
-			ON CONFLICT (email) DO UPDATE SET first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name
-			RETURNING id`, email, firstName, lastName).Scan(&userID)
+	var canonicalUserID uuid.UUID
+	var orphanedUserIDs []uuid.UUID
+
+	switch {
+	case preferredUserID != nil:
+		canonicalUserID = *preferredUserID
+		orphanedUserIDs, plan, err = s.preparePreferredVKUserTx(tx, canonicalUserID, linkedUserID, providerExists, email)
 		if err != nil {
-			return "", "", fmt.Errorf("create user: %w", err)
+			return "", "", fmt.Errorf("prepare preferred vk user: %w", err)
 		}
-		// Save oauth_providers row
-		_, err = s.db.Exec(`
-			INSERT INTO oauth_providers (user_id, provider, provider_user_id, access_token)
-			VALUES ($1, 'vk', $2, $3)
-			ON CONFLICT (provider, provider_user_id) DO UPDATE SET access_token = EXCLUDED.access_token`,
-			userID, providerUserID, accessToken)
+		plan, err = s.upsertUserTx(tx, canonicalUserID, email, namePtr, firstNamePtr, lastNamePtr, plan)
 		if err != nil {
-			return "", "", fmt.Errorf("save oauth provider: %w", err)
+			return "", "", fmt.Errorf("upsert preferred user: %w", err)
 		}
-	} else {
-		// Update token
-		_, _ = s.db.Exec(`UPDATE oauth_providers SET access_token = $1
-			WHERE provider = 'vk' AND provider_user_id = $2`, accessToken, providerUserID)
+	case providerExists:
+		canonicalUserID = linkedUserID
+		plan, err = s.upsertUserTx(tx, canonicalUserID, email, namePtr, firstNamePtr, lastNamePtr, plan)
+		if err != nil {
+			return "", "", fmt.Errorf("refresh existing vk user: %w", err)
+		}
+	default:
+		canonicalUserID, plan, err = s.findOrCreateOAuthUserByEmailTx(tx, email, namePtr, firstNamePtr, lastNamePtr, plan)
+		if err != nil {
+			return "", "", fmt.Errorf("create oauth user: %w", err)
+		}
+	}
+
+	if err := s.ensureSubscriptionTx(tx, canonicalUserID, plan); err != nil {
+		return "", "", fmt.Errorf("ensure subscription: %w", err)
+	}
+
+	if err := s.upsertVKProviderTx(tx, canonicalUserID, providerUserID, accessToken); err != nil {
+		return "", "", fmt.Errorf("save oauth provider: %w", err)
+	}
+
+	for _, orphanUserID := range orphanedUserIDs {
+		if orphanUserID == canonicalUserID {
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM users WHERE id = $1`, orphanUserID); err != nil {
+			return "", "", fmt.Errorf("delete orphaned vk user %s: %w", orphanUserID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("commit vk login: %w", err)
 	}
 
 	// Issue JWT
-	parsedID := uuid.MustParse(userID)
-	accessJWT, err := s.jwtService.GenerateAccessToken(parsedID, email, "free")
+	accessJWT, err := s.jwtService.GenerateAccessToken(canonicalUserID, email, plan)
 	if err != nil {
 		return "", "", err
 	}
-	refreshJWT, err := s.jwtService.GenerateRefreshToken(parsedID)
+	refreshJWT, err := s.jwtService.GenerateRefreshToken(canonicalUserID)
 	if err != nil {
 		return "", "", err
 	}
-	if err := s.saveRefreshToken(parsedID, refreshJWT, "vk-oauth"); err != nil {
+	if err := s.saveRefreshToken(canonicalUserID, refreshJWT, "vk-oauth"); err != nil {
 		return "", "", err
 	}
 	return accessJWT, refreshJWT, nil
+}
+
+func (s *AuthService) findOrCreateOAuthUserByEmailTx(
+	tx *sql.Tx,
+	email string,
+	name, firstName, lastName *string,
+	plan string,
+) (uuid.UUID, string, error) {
+	var userID uuid.UUID
+	actualPlan := plan
+
+	err := tx.QueryRow(`
+		INSERT INTO users (email, password_hash, name, first_name, last_name, email_verified, subscription_plan, created_at, updated_at)
+		VALUES ($1, NULL, $2, $3, $4, FALSE, $5, NOW(), NOW())
+		ON CONFLICT (email) DO UPDATE
+		SET
+			name = COALESCE(EXCLUDED.name, users.name),
+			first_name = COALESCE(EXCLUDED.first_name, users.first_name),
+			last_name = COALESCE(EXCLUDED.last_name, users.last_name),
+			updated_at = NOW()
+		RETURNING id, subscription_plan
+	`, email, name, firstName, lastName, plan).Scan(&userID, &actualPlan)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+
+	return userID, actualPlan, nil
+}
+
+func (s *AuthService) upsertUserTx(
+	tx *sql.Tx,
+	userID uuid.UUID,
+	email string,
+	name, firstName, lastName *string,
+	plan string,
+) (string, error) {
+	actualPlan := plan
+
+	err := tx.QueryRow(`
+		INSERT INTO users (id, email, password_hash, name, first_name, last_name, email_verified, subscription_plan, created_at, updated_at)
+		VALUES ($1, $2, NULL, $3, $4, $5, FALSE, $6, NOW(), NOW())
+		ON CONFLICT (id) DO UPDATE
+		SET
+			email = EXCLUDED.email,
+			name = COALESCE(EXCLUDED.name, users.name),
+			first_name = COALESCE(EXCLUDED.first_name, users.first_name),
+			last_name = COALESCE(EXCLUDED.last_name, users.last_name),
+			updated_at = NOW()
+		RETURNING subscription_plan
+	`, userID, email, name, firstName, lastName, plan).Scan(&actualPlan)
+	if err != nil {
+		return "", err
+	}
+
+	return actualPlan, nil
+}
+
+func (s *AuthService) preparePreferredVKUserTx(
+	tx *sql.Tx,
+	canonicalUserID uuid.UUID,
+	linkedUserID uuid.UUID,
+	providerExists bool,
+	email string,
+) ([]uuid.UUID, string, error) {
+	plan := "free"
+	orphanedUserIDs := make([]uuid.UUID, 0, 2)
+	seen := map[uuid.UUID]struct{}{}
+
+	addOrphan := func(userID uuid.UUID) error {
+		if userID == uuid.Nil || userID == canonicalUserID {
+			return nil
+		}
+		if _, ok := seen[userID]; ok {
+			return nil
+		}
+
+		var userPlan string
+		err := tx.QueryRow(`SELECT subscription_plan FROM users WHERE id = $1`, userID).Scan(&userPlan)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil
+			}
+			return err
+		}
+		if userPlan != "" {
+			plan = userPlan
+		}
+
+		_, err = tx.Exec(`UPDATE users SET email = $2, updated_at = NOW() WHERE id = $1`, userID, orphanedVKEmail(userID))
+		if err != nil {
+			return err
+		}
+
+		seen[userID] = struct{}{}
+		orphanedUserIDs = append(orphanedUserIDs, userID)
+		return nil
+	}
+
+	if providerExists {
+		if err := addOrphan(linkedUserID); err != nil {
+			return nil, "", err
+		}
+	}
+
+	var emailUserID uuid.UUID
+	err := tx.QueryRow(`SELECT id FROM users WHERE email = $1`, email).Scan(&emailUserID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, "", err
+	}
+	if err == nil {
+		if err := addOrphan(emailUserID); err != nil {
+			return nil, "", err
+		}
+	}
+
+	return orphanedUserIDs, plan, nil
+}
+
+func (s *AuthService) ensureSubscriptionTx(tx *sql.Tx, userID uuid.UUID, plan string) error {
+	var exists bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id = $1)`, userID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	now := time.Now()
+	_, err := tx.Exec(`
+		INSERT INTO subscriptions (id, user_id, plan, status, started_at, trial_ends_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`,
+		uuid.New(),
+		userID,
+		plan,
+		"trialing",
+		now,
+		now.Add(7*24*time.Hour),
+		now,
+		now,
+	)
+	return err
+}
+
+func (s *AuthService) upsertVKProviderTx(tx *sql.Tx, userID uuid.UUID, providerUserID, accessToken string) error {
+	_, err := tx.Exec(`
+		INSERT INTO oauth_providers (user_id, provider, provider_user_id, access_token)
+		VALUES ($1, 'vk', $2, $3)
+		ON CONFLICT (provider, provider_user_id) DO UPDATE
+		SET
+			user_id = EXCLUDED.user_id,
+			access_token = EXCLUDED.access_token,
+			updated_at = NOW()
+	`, userID, providerUserID, accessToken)
+	return err
+}
+
+func nullableTrimmedString(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func buildDisplayName(firstName, lastName *string) *string {
+	parts := make([]string, 0, 2)
+	if firstName != nil {
+		parts = append(parts, *firstName)
+	}
+	if lastName != nil {
+		parts = append(parts, *lastName)
+	}
+
+	fullName := strings.TrimSpace(strings.Join(parts, " "))
+	if fullName == "" {
+		return nil
+	}
+
+	return &fullName
+}
+
+func orphanedVKEmail(userID uuid.UUID) string {
+	return fmt.Sprintf("orphaned+%s@vk.inbetwin.local", userID)
 }
 
 func stringPtr(s string) *string {

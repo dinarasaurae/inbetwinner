@@ -1,12 +1,16 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -83,7 +87,10 @@ func fetchCSVMatrix(ctx context.Context, csvURL string) ([][]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("google sheets returned %d — make sure the sheet is public (File → Share → Anyone with link)", resp.StatusCode)
+		return nil, &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("google sheets returned %d — make sure the sheet is public (File → Share → Anyone with link)", resp.StatusCode),
+		}
 	}
 
 	r := csv.NewReader(resp.Body)
@@ -102,6 +109,193 @@ func fetchCSVMatrix(ctx context.Context, csvURL string) ([][]string, error) {
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+type googleSheetsSpreadsheetResponse struct {
+	Sheets []struct {
+		Properties struct {
+			SheetID int    `json:"sheetId"`
+			Title   string `json:"title"`
+		} `json:"properties"`
+	} `json:"sheets"`
+}
+
+type googleSheetsValuesResponse struct {
+	Values [][]string `json:"values"`
+}
+
+type googleSheetsBatchGetByDataFilterResponse struct {
+	ValueRanges []struct {
+		ValueRange struct {
+			Range  string     `json:"range"`
+			Values [][]string `json:"values"`
+		} `json:"valueRange"`
+	} `json:"valueRanges"`
+}
+
+type googleSheetRef struct {
+	SheetID int
+	Title   string
+}
+
+func fetchGoogleSheetsAPI[T any](ctx context.Context, endpoint, accessToken string, out *T) error {
+	return fetchGoogleSheetsAPIWithBody(ctx, http.MethodGet, endpoint, accessToken, nil, out)
+}
+
+func fetchGoogleSheetsAPIWithBody[T any](ctx context.Context, method, endpoint, accessToken string, body io.Reader, out *T) error {
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("google sheets api request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = http.StatusText(resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusForbidden &&
+			(strings.Contains(msg, "ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
+				strings.Contains(msg, "insufficient authentication scopes")) {
+			return &RequestError{
+				Status:  http.StatusUnprocessableEntity,
+				Message: "google account is connected without the required Google Sheets permissions; disconnect and reconnect Google for this workspace, then try again",
+			}
+		}
+		return &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("google sheets api returned %d: %s", resp.StatusCode, msg),
+		}
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("parse google sheets api response: %w", err)
+	}
+	return nil
+}
+
+func fetchSpreadsheetMetadata(ctx context.Context, spreadsheetID, accessToken string) (*googleSheetsSpreadsheetResponse, error) {
+	metaURL := fmt.Sprintf(
+		"https://sheets.googleapis.com/v4/spreadsheets/%s?fields=sheets.properties(sheetId,title)",
+		url.PathEscape(spreadsheetID),
+	)
+	var meta googleSheetsSpreadsheetResponse
+	if err := fetchGoogleSheetsAPI(ctx, metaURL, accessToken, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
+}
+
+func resolveGoogleSheetRef(ctx context.Context, spreadsheetID, gid, requestedSheetName, accessToken string) (*googleSheetRef, error) {
+	meta, err := fetchSpreadsheetMetadata(ctx, spreadsheetID, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	if len(meta.Sheets) == 0 {
+		return nil, &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: "spreadsheet has no sheets",
+		}
+	}
+
+	if gid != "" {
+		sheetID, err := strconv.Atoi(gid)
+		if err != nil {
+			return nil, &RequestError{
+				Status:  http.StatusBadRequest,
+				Message: "invalid gid in spreadsheet URL",
+			}
+		}
+		for _, sheet := range meta.Sheets {
+			if sheet.Properties.SheetID == sheetID {
+				return &googleSheetRef{
+					SheetID: sheet.Properties.SheetID,
+					Title:   sheet.Properties.Title,
+				}, nil
+			}
+		}
+		return nil, &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("sheet with gid %s not found in spreadsheet", gid),
+		}
+	}
+
+	requestedSheetName = strings.TrimSpace(requestedSheetName)
+	if requestedSheetName != "" {
+		for _, sheet := range meta.Sheets {
+			if sheet.Properties.Title == requestedSheetName {
+				return &googleSheetRef{
+					SheetID: sheet.Properties.SheetID,
+					Title:   sheet.Properties.Title,
+				}, nil
+			}
+		}
+		return nil, &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("sheet with name %q not found in spreadsheet", requestedSheetName),
+		}
+	}
+
+	first := meta.Sheets[0].Properties
+	return &googleSheetRef{
+		SheetID: first.SheetID,
+		Title:   first.Title,
+	}, nil
+}
+
+func fetchSheetMatrixWithOAuth(ctx context.Context, spreadsheetID, gid, requestedSheetName, accessToken string) ([][]string, string, error) {
+	sheet, err := resolveGoogleSheetRef(ctx, spreadsheetID, gid, requestedSheetName, accessToken)
+	if err != nil {
+		return nil, "", err
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"dataFilters": []map[string]any{
+			{
+				"gridRange": map[string]any{
+					"sheetId":          sheet.SheetID,
+					"startRowIndex":    0,
+					"startColumnIndex": 0,
+				},
+			},
+		},
+		"majorDimension": "ROWS",
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal google sheets request: %w", err)
+	}
+
+	valuesURL := fmt.Sprintf(
+		"https://sheets.googleapis.com/v4/spreadsheets/%s/values:batchGetByDataFilter",
+		url.PathEscape(spreadsheetID),
+	)
+	var values googleSheetsBatchGetByDataFilterResponse
+	if err := fetchGoogleSheetsAPIWithBody(
+		ctx,
+		http.MethodPost,
+		valuesURL,
+		accessToken,
+		bytes.NewReader(payload),
+		&values,
+	); err != nil {
+		return nil, "", err
+	}
+	if len(values.ValueRanges) == 0 {
+		return nil, "", &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: "google sheets api returned no value ranges",
+		}
+	}
+	return values.ValueRanges[0].ValueRange.Values, sheet.Title, nil
 }
 
 // ─── Smart table parsing (ported from reference TypeScript impl) ───────────────
@@ -420,28 +614,71 @@ func (s *SheetsService) SyncSheet(ctx context.Context, workspaceID uuid.UUID, re
 
 	spreadsheetID, gid := parseGoogleSheetsURL(req.SpreadsheetID)
 	if spreadsheetID == "" {
-		return nil, fmt.Errorf("invalid spreadsheet_id: provide a Google Sheets URL or bare ID")
+		return nil, &RequestError{
+			Status:  http.StatusBadRequest,
+			Message: "invalid spreadsheet_id: provide a Google Sheets URL or bare ID",
+		}
 	}
 
-	csvURL := buildCSVExportURL(spreadsheetID, gid)
-	rawData, err := fetchCSVMatrix(ctx, csvURL)
-	if err != nil {
-		return nil, fmt.Errorf("get sheet: %w", err)
+	sheetName := strings.TrimSpace(req.SheetName)
+	var rawData [][]string
+	if req.UseOAuth {
+		if s.googleOAuth == nil {
+			return nil, &RequestError{
+				Status:  http.StatusServiceUnavailable,
+				Message: "google oauth is not configured on the server",
+			}
+		}
+		accessToken, err := s.googleOAuth.GetValidToken(ctx, workspaceID)
+		if err != nil {
+			switch {
+			case strings.HasPrefix(err.Error(), "google_not_connected:"):
+				return nil, &RequestError{
+					Status:  http.StatusUnprocessableEntity,
+					Message: "google account is not connected for this workspace",
+				}
+			case strings.HasPrefix(err.Error(), "refresh_failed:"):
+				return nil, &RequestError{
+					Status:  http.StatusBadGateway,
+					Message: "failed to refresh Google access token",
+				}
+			default:
+				return nil, fmt.Errorf("google oauth: %w", err)
+			}
+		}
+		rawData, sheetName, err = fetchSheetMatrixWithOAuth(ctx, spreadsheetID, gid, sheetName, accessToken)
+		if err != nil {
+			return nil, fmt.Errorf("get sheet: %w", err)
+		}
+	} else {
+		csvURL := buildCSVExportURL(spreadsheetID, gid)
+		rawData, err = fetchCSVMatrix(ctx, csvURL)
+		if err != nil {
+			return nil, fmt.Errorf("get sheet: %w", err)
+		}
 	}
 	if len(rawData) < 2 {
-		return nil, fmt.Errorf("sheet has no data rows (got %d rows total)", len(rawData))
+		return nil, &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("sheet has no data rows (got %d rows total)", len(rawData)),
+		}
 	}
 
 	rowTexts, err := parseTableWithSmartAnalysis(rawData)
 	if err != nil {
-		return nil, fmt.Errorf("parse table: %w", err)
+		return nil, &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("parse table: %v", err),
+		}
 	}
 	if len(rowTexts) == 0 {
-		return nil, fmt.Errorf("sheet has no non-empty data rows after parsing")
+		return nil, &RequestError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: "sheet has no non-empty data rows after parsing",
+		}
 	}
 
 	// Derive sheet_name for display
-	sheetName := req.SheetName
 	if sheetName == "" {
 		if gid != "" && gid != "0" {
 			sheetName = "gid:" + gid

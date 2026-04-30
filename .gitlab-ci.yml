@@ -105,8 +105,8 @@ deploy:production:
           set -e
           cd /opt/inbetwin
 
-          # Pull latest compose / config files
-          git fetch origin main && git reset --hard origin/main
+          # Pull latest compose / config files from the branch that triggered CI
+          git fetch origin ${CI_COMMIT_BRANCH} && git reset --hard origin/${CI_COMMIT_BRANCH}
 
           # Log in to GitLab Container Registry
           echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin

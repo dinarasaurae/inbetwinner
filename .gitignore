@@ -49,7 +49,6 @@ logs/
 .idea/
 .vscode/
 *.iml
-.claude/
 
 # OS
 .DS_Store
@@ -58,8 +57,6 @@ Thumbs.db
 *~
 
 SMOKE_TEST.md
-agents.md
-claude.md
 
 # Test coverage
 coverage.*
@@ -68,3 +65,14 @@ coverage.*
 
 # Frontend (moved to separate repository)
 frontend/
+landing/node_modules/
+landing/dist/
+
+# Local build outputs
+/auth-service/server
+/auth-service/auth-service-test
+/inbetwin-api-gateway/server
+/inbetwin-api-gateway/api-gateway-fast
+/inbetwin-api-gateway/api-gateway-test
+/llm-service/server
+/social-service/server
