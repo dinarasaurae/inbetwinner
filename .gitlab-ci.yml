@@ -116,6 +116,14 @@ deploy:production:
           # Pull latest compose / config files from the branch that triggered CI
           git fetch origin "$DEPLOY_BRANCH" && git reset --hard "origin/$DEPLOY_BRANCH"
 
+          if [ -f .env ]; then
+            set -a
+            . ./.env
+            set +a
+          fi
+          : "${DOMAIN:?DOMAIN is required in /opt/inbetwin/.env}"
+          sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN}/g" nginx/conf.d/default.conf
+
           # Log in to GitLab Container Registry
           echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
 
