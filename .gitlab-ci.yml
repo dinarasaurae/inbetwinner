@@ -112,12 +112,15 @@ deploy:production:
          REGISTRY_PASS=${CI_REGISTRY_PASSWORD}
          IMAGE_PREFIX=${IMAGE_PREFIX}
          IMAGE_TAG=${CI_COMMIT_SHORT_SHA}
+         DEPLOY_BRANCH=${CI_COMMIT_BRANCH}
          bash -s" << 'REMOTE'
           set -e
           cd /opt/inbetwin
 
+          : "${DEPLOY_BRANCH:?DEPLOY_BRANCH is required}"
+
           # Pull latest compose / config files from the branch that triggered CI
-          git fetch origin ${CI_COMMIT_BRANCH} && git reset --hard origin/${CI_COMMIT_BRANCH}
+          git fetch origin "$DEPLOY_BRANCH" && git reset --hard "origin/$DEPLOY_BRANCH"
 
           # Log in to GitLab Container Registry
           echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
