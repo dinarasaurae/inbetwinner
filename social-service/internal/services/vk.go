@@ -39,12 +39,10 @@ type pendingOAuth struct {
 }
 
 var allowedVKCommunityScopes = []string{
-	"messages",
 	"manage",
+	"messages",
 	"photos",
 	"docs",
-	"wall",
-	"stories",
 }
 
 // ─── VKService ────────────────────────────────────────────────────────────────
@@ -143,6 +141,30 @@ func normalizeVKCommunityScopes(raw string) string {
 	return strings.Join(scopes, ",")
 }
 
+func shouldSurfaceAdminGroupsError(apiErr error, connectedGroups int) bool {
+	if apiErr == nil || connectedGroups > 0 {
+		return false
+	}
+	msg := strings.ToLower(apiErr.Error())
+	return strings.Contains(msg, "vk error 1051") || strings.Contains(msg, "profile_type_unsupported")
+}
+
+func isInvalidGroupsOAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid_groups") ||
+		strings.Contains(msg, "only group admins have access to group tokens")
+}
+
+func isAdminGroup(group *vkapi.Group) bool {
+	if group == nil {
+		return false
+	}
+	return group.IsAdmin == 1 || group.AdminLevel > 0
+}
+
 // ─── User OAuth flow ──────────────────────────────────────────────────────────
 // Step 1 of connecting VK: user authorises the inBeTwin app.
 // After this we can list admin groups and fetch the user's own profile data.
@@ -157,13 +179,6 @@ func normalizeVKCommunityScopes(raw string) string {
 //   - Implicit flow removed (response_type=token no longer works)
 //   - device_id returned in callback, required for token exchange
 func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
-	// Historically the mobile flow worked through oauth.vk.com so that step 1
-	// (user auth) and step 2 (community auth) stayed in the same browser auth
-	// surface. Keep that behavior for android/ios compatibility.
-	if platform == "android" || platform == "ios" {
-		return s.UserLegacyOAuthStart(ctx, userID, platform)
-	}
-
 	pc := s.cfg.VKPlatform(platform)
 	if pc.AppID == "" {
 		return "", "", false, fmt.Errorf("VK app ID not configured for platform %q", platform)
@@ -191,15 +206,16 @@ func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platfo
 	}
 	s.oauthMu.Unlock()
 
-	// VK ID OAuth 2.1 authorization URL (opened in browser/WebView)
-	// Scopes: vkid.personal_info (basic profile) + groups + wall + offline
+	// VK ID OAuth 2.1 authorization URL (opened in browser/WebView).
+	// For social onboarding we only request the scopes that current VK docs tie
+	// to community discovery: basic profile + groups.
 	authURL = fmt.Sprintf(
 		"%s?response_type=code&client_id=%s&redirect_uri=%s"+
 			"&scope=%s&state=%s&code_challenge=%s&code_challenge_method=S256",
 		vkapi.VKIDAuthURL,
 		url.QueryEscape(pc.AppID),
 		url.QueryEscape(pc.RedirectURI),
-		url.QueryEscape("vkid.personal_info groups wall offline"),
+		url.QueryEscape("vkid.personal_info groups"),
 		state,
 		codeChallenge,
 	)
@@ -208,7 +224,8 @@ func (s *VKService) UserOAuthStart(ctx context.Context, userID uuid.UUID, platfo
 
 // UserLegacyOAuthStart builds the old oauth.vk.com browser flow for mobile.
 // For android/ios we intentionally reuse the community OAuth callback because
-// that HTTPS redirect is what current VK app settings trust on oauth.vk.com.
+// that HTTPS redirect is what the later working 76fadec flow trusted on
+// oauth.vk.com for keeping step 1 and step 2 in the same browser session.
 func (s *VKService) UserLegacyOAuthStart(ctx context.Context, userID uuid.UUID, platform string) (authURL, state string, implicit bool, err error) {
 	var pc config.VKPlatformConfig
 	if platform == "android" || platform == "ios" {
@@ -508,6 +525,21 @@ func (s *VKService) finishGroupOAuth(ctx context.Context, code string, pending p
 
 	tokenResp, err := s.exchangeCode(ctx, code, pc)
 	if err != nil {
+		if s.db != nil && isInvalidGroupsOAuthError(err) {
+			groupCheck, connectedVKUserID, checkErr := s.lookupGroupAdminAccess(ctx, pending.userID, pending.groupID)
+			if checkErr == nil {
+				if isAdminGroup(groupCheck) {
+					return nil, fmt.Errorf(
+						"invalid_groups: selected group %d is admin-visible for connected VK account %d (is_admin=%d admin_level=%d), so the vk.com browser session likely belongs to a different VK account; log out of VK in the browser and retry",
+						pending.groupID, connectedVKUserID, groupCheck.IsAdmin, groupCheck.AdminLevel,
+					)
+				}
+				return nil, fmt.Errorf(
+					"invalid_groups: connected VK account %d is not admin of group %d according to groups.getById (is_admin=%d admin_level=%d)",
+					connectedVKUserID, pending.groupID, groupCheck.IsAdmin, groupCheck.AdminLevel,
+				)
+			}
+		}
 		return nil, fmt.Errorf("token_exchange: %w", err)
 	}
 
@@ -681,6 +713,16 @@ func (s *VKService) SaveCommunityTokenByInteg(ctx context.Context, userID uuid.U
 	return s.SaveCommunityToken(ctx, userID, integ.GroupID, token)
 }
 
+// SaveCommunityTokenByRef resolves a manual group reference and stores the
+// provided community token without requiring the browser-based community OAuth.
+func (s *VKService) SaveCommunityTokenByRef(ctx context.Context, userID uuid.UUID, groupRef, token string) (*models.VKIntegration, error) {
+	groupID, err := s.ResolveGroupRef(ctx, userID, groupRef)
+	if err != nil {
+		return nil, err
+	}
+	return s.SaveCommunityToken(ctx, userID, groupID, token)
+}
+
 // SaveCommunityToken saves a manually created community token for the given group.
 // The token must have been created in the VK community management panel with
 // messages and manage permissions.
@@ -785,6 +827,16 @@ func (s *VKService) GetAdminGroups(ctx context.Context, userID uuid.UUID) ([]mod
 	}
 
 	if apiErr != nil {
+		// Fresh VK ID connections cannot enumerate admin groups for some profile
+		// types. If we also have no previously connected groups to show, bubble the
+		// error so mobile can switch to the manual group_ref flow explicitly.
+		if shouldSurfaceAdminGroupsError(apiErr, len(dbGroups)) {
+			return nil, fmt.Errorf(
+				"profile_type_unsupported: automatic admin group discovery requires a VK ID user token with scope=groups; if your VK app has not been granted groups access yet, request it from devsupport@corp.vk.com or connect the community manually by ID/link (%w)",
+				apiErr,
+			)
+		}
+
 		// VK ID 2.0 / profile-type restriction — return DB rows enriched via groups.getById
 		result := make([]models.VKAdminGroup, 0, len(dbGroups))
 		for _, r := range dbGroups {
@@ -1267,6 +1319,32 @@ func (s *VKService) persistLPTs(integID uuid.UUID, ts string) {
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
+
+func (s *VKService) lookupStoredVKUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var vkUserID int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT vk_user_id FROM vk_user_connections WHERE user_id=$1`, userID,
+	).Scan(&vkUserID); err != nil {
+		return 0, fmt.Errorf("not_found: user VK connection not found")
+	}
+	return vkUserID, nil
+}
+
+func (s *VKService) lookupGroupAdminAccess(ctx context.Context, userID uuid.UUID, groupID int64) (*vkapi.Group, int64, error) {
+	userToken, err := s.loadUserToken(ctx, userID)
+	if err != nil {
+		return nil, 0, err
+	}
+	vkUserID, err := s.lookupStoredVKUserID(ctx, userID)
+	if err != nil {
+		return nil, 0, err
+	}
+	group, err := vkapi.NewUserClient(userToken).GroupsGetByID(ctx, groupID)
+	if err != nil {
+		return nil, vkUserID, err
+	}
+	return group, vkUserID, nil
+}
 
 // loadUserToken retrieves and decrypts the user-level VK access token.
 func (s *VKService) loadUserToken(ctx context.Context, userID uuid.UUID) (string, error) {

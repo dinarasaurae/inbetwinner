@@ -75,8 +75,9 @@ type Config struct {
 	// historically working auto-token path without disturbing app login.
 	VKLegacyMobileRedirectURI string
 	// Some mobile builds send the VK SDK token directly to social-service via
-	// /oauth/user/import. Disabled by default so the app falls back to the
-	// historically working browser OAuth flow.
+	// /oauth/user/import. Keep it enabled by default so a fresh VK app login can
+	// immediately hydrate the social onboarding profile before the dedicated
+	// community-connection steps begin.
 	VKAllowUserTokenImport bool
 
 	// Frontend URL — browser is redirected here after web OAuth completes
@@ -216,7 +217,7 @@ func Load() *Config {
 		VKWebAppSecret:     getEnv("VK_APP_SECRET_WEB", ""),
 		VKWebRedirectURI:   getEnv("VK_REDIRECT_URI_WEB", "http://localhost:3002/api/v1/social/vk/oauth/user/callback"),
 		VKGroupRedirectURI: getEnv("VK_REDIRECT_URI_GROUP", "http://localhost:3002/api/v1/social/vk/oauth/callback"),
-		VKCommunityScopes:  getEnv("VK_COMMUNITY_SCOPES", "messages,manage,photos,docs,wall,stories"),
+		VKCommunityScopes:  getEnv("VK_COMMUNITY_SCOPES", "manage,messages,photos,docs"),
 
 		VKAndroidAppID:     getEnv("VK_APP_ID_ANDROID", "54511649"),
 		VKAndroidAppSecret: getEnv("VK_APP_SECRET_ANDROID", ""),

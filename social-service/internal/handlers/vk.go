@@ -157,7 +157,7 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 	groupRef := c.Query("group_ref")
 	var (
 		groupID int64
-		err error
+		err     error
 	)
 	if groupRef != "" {
 		groupID, err = h.svc.ResolveGroupRef(c.Context(), userID, groupRef)
@@ -176,8 +176,7 @@ func (h *VKHandler) OAuthStart(c fiber.Ctx) error {
 
 	authURL, state, err := h.svc.OAuthStart(c.Context(), userID, groupID, platform)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(
-			jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))
+		return mapVKError(c, err)
 	}
 
 	return c.JSON(jwtlib.NewSuccessResponse("", models.OAuthStartResponse{
@@ -522,7 +521,7 @@ func (h *VKHandler) SaveCommunityTokenByInteg(c fiber.Ctx) error {
 	}
 
 	var body struct {
-		IntegrationID string `json:"integration_id"`
+		IntegrationID  string `json:"integration_id"`
 		CommunityToken string `json:"community_token"`
 	}
 	if err := c.Bind().JSON(&body); err != nil || strings.TrimSpace(body.CommunityToken) == "" || strings.TrimSpace(body.IntegrationID) == "" {
@@ -605,6 +604,40 @@ func (h *VKHandler) SaveCommunityToken(c fiber.Ctx) error {
 	return c.JSON(jwtlib.NewSuccessResponse("community token saved", integ))
 }
 
+// SaveCommunityTokenByRef handles POST /social/vk/groups/token/by-ref
+// and allows saving a manually created community token by numeric ID, short
+// name, or a full vk.com/community link.
+func (h *VKHandler) SaveCommunityTokenByRef(c fiber.Ctx) error {
+	userID, ok := jwtlib.GetUserID(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
+	}
+
+	var body struct {
+		GroupRef string `json:"group_ref"`
+		Token    string `json:"token"`
+	}
+	if err := c.Bind().JSON(&body); err != nil ||
+		strings.TrimSpace(body.GroupRef) == "" ||
+		strings.TrimSpace(body.Token) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(
+			jwtlib.NewErrorResponse("invalid_request", "group_ref and token are required"),
+		)
+	}
+
+	integ, err := h.svc.SaveCommunityTokenByRef(
+		c.Context(),
+		userID,
+		strings.TrimSpace(body.GroupRef),
+		strings.TrimSpace(body.Token),
+	)
+	if err != nil {
+		return mapVKError(c, err)
+	}
+
+	return c.JSON(jwtlib.NewSuccessResponse("community token saved", integ))
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func normalisePlatform(p string) string {
@@ -627,6 +660,8 @@ func mapVKError(c fiber.Ctx, err error) error {
 		return c.Status(fiber.StatusNotFound).JSON(jwtlib.NewErrorResponse("not_found", msg))
 	case strings.Contains(msg, "unauthorized") || strings.Contains(msg, "invalid_state"):
 		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", msg))
+	case strings.Contains(msg, "invalid_groups"):
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(jwtlib.NewErrorResponse("invalid_groups", msg))
 	case strings.Contains(msg, "invalid_request") || strings.Contains(msg, "invalid_group_id"):
 		return c.Status(fiber.StatusBadRequest).JSON(jwtlib.NewErrorResponse("invalid_request", msg))
 	default:

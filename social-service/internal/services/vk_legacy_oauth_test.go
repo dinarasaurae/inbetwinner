@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dinarasaurae/inbetwin-social-service/internal/config"
+	vkapi "github.com/dinarasaurae/inbetwin-social-service/internal/vk"
 )
 
 func TestUserLegacyOAuthStartAndroidUsesCommunityRedirect(t *testing.T) {
@@ -85,14 +87,58 @@ func TestOAuthStartSanitizesCommunityScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("url.Parse: %v", err)
 	}
-	if got := parsed.Query().Get("scope"); got != "messages,photos,docs,wall" {
-		t.Fatalf("scope = %q, want %q", got, "messages,photos,docs,wall")
+	if got := parsed.Query().Get("scope"); got != "messages,photos,docs" {
+		t.Fatalf("scope = %q, want %q", got, "messages,photos,docs")
 	}
 }
 
 func TestNormalizeVKCommunityScopesFallsBackToAllowedDefaults(t *testing.T) {
-	if got := normalizeVKCommunityScopes("offline,market"); got != "messages,manage,photos,docs,wall,stories" {
+	if got := normalizeVKCommunityScopes("offline,market"); got != "manage,messages,photos,docs" {
 		t.Fatalf("scope = %q, want full allowed default", got)
+	}
+}
+
+func TestShouldSurfaceAdminGroupsErrorOn1051WithoutConnectedGroups(t *testing.T) {
+	got := shouldSurfaceAdminGroupsError(
+		errors.New("vk error 1051: Method is not available for this profile type"),
+		0,
+	)
+	if !got {
+		t.Fatalf("expected 1051 to surface when no connected groups exist")
+	}
+}
+
+func TestShouldNotSurfaceAdminGroupsErrorWhenConnectedGroupsExist(t *testing.T) {
+	got := shouldSurfaceAdminGroupsError(
+		errors.New("vk error 1051: Method is not available for this profile type"),
+		1,
+	)
+	if got {
+		t.Fatalf("expected 1051 to stay hidden when connected groups exist")
+	}
+}
+
+func TestIsInvalidGroupsOAuthError(t *testing.T) {
+	if !isInvalidGroupsOAuthError(errors.New("vk oauth error: invalid_groups")) {
+		t.Fatalf("expected invalid_groups to be detected")
+	}
+	if !isInvalidGroupsOAuthError(errors.New("only group admins have access to group tokens")) {
+		t.Fatalf("expected group admin text to be detected")
+	}
+	if isInvalidGroupsOAuthError(errors.New("vk oauth error: invalid_request")) {
+		t.Fatalf("unexpected match for unrelated oauth error")
+	}
+}
+
+func TestIsAdminGroup(t *testing.T) {
+	if !isAdminGroup(&vkapi.Group{IsAdmin: 1}) {
+		t.Fatalf("expected IsAdmin=1 to count as admin")
+	}
+	if !isAdminGroup(&vkapi.Group{AdminLevel: 3}) {
+		t.Fatalf("expected AdminLevel>0 to count as admin")
+	}
+	if isAdminGroup(&vkapi.Group{}) {
+		t.Fatalf("expected zero-value group to not count as admin")
 	}
 }
 

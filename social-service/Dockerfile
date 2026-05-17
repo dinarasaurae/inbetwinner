@@ -1,4 +1,11 @@
+# syntax=docker/dockerfile:1.7
+
 FROM golang:1.26-alpine AS builder
+
+ARG GOPROXY=https://proxy.golang.org|direct
+ARG GOSUMDB=sum.golang.org
+ENV GOPROXY=${GOPROXY} \
+    GOSUMDB=${GOSUMDB}
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -8,11 +15,18 @@ COPY social-service/go.mod social-service/go.sum ./
 
 COPY shared-libs/ ../shared-libs/
 
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    for i in 1 2 3; do \
+      go mod download && break; \
+      if [ "$i" = "3" ]; then exit 1; fi; \
+      sleep $((i * 5)); \
+    done
 
 COPY social-service/ .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o social-service ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o social-service ./cmd/server
 
 FROM alpine:latest
 

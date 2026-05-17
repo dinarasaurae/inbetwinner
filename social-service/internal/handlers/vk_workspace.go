@@ -3,8 +3,8 @@ package handlers
 import (
 	"strconv"
 
-	"github.com/gofiber/fiber/v3"
 	jwtlib "github.com/dinarasaurae/inbetwin-shared/jwt-go"
+	"github.com/gofiber/fiber/v3"
 
 	"github.com/dinarasaurae/inbetwin-social-service/internal/models"
 )
@@ -27,7 +27,7 @@ func (h *VKHandler) UserLegacyOAuthStart(c fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(jwtlib.NewErrorResponse("unauthorized", nil))
 	}
 	platform := normalisePlatform(c.Query("platform"))
-	authURL, state, implicit, err := h.svc.UserOAuthStart(c.Context(), userID, platform)
+	authURL, state, implicit, err := h.svc.UserLegacyOAuthStart(c.Context(), userID, platform)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(jwtlib.NewErrorResponse("oauth_start_failed", err.Error()))
 	}
