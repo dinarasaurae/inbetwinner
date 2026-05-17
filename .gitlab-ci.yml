@@ -136,6 +136,7 @@ deploy:production:
           # Pull new images and restart
           docker compose -f docker-compose.prod.yml pull
           docker compose -f docker-compose.prod.yml up -d --remove-orphans --no-build
+          docker compose -f docker-compose.prod.yml restart nginx
 
           # Clean up dangling images
           docker image prune -f
