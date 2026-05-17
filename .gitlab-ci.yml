@@ -123,6 +123,16 @@ deploy:production:
           export IMAGE_PREFIX="$IMAGE_PREFIX"
           export IMAGE_TAG="$IMAGE_TAG"
 
+          # Previous interrupted recreates can leave Compose temp containers named
+          # like "db124a033186_inbetwin-redis", which block the next recreate.
+          stale_compose_containers="$(
+            docker ps -a --format '{{.ID}} {{.Names}}' \
+              | awk '$2 ~ /^[0-9a-f]+_inbetwin-/ { print $1 }'
+          )"
+          if [ -n "$stale_compose_containers" ]; then
+            docker rm -f $stale_compose_containers
+          fi
+
           # Pull new images and restart
           docker compose -f docker-compose.prod.yml pull
           docker compose -f docker-compose.prod.yml up -d --remove-orphans --no-build
