@@ -3,17 +3,21 @@ package database
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/lib/pq"
 
 	"github.com/dinarasaurae/inbetwin-social-service/internal/config"
 )
+
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
 
 type DB struct {
 	*sql.DB
@@ -42,13 +46,19 @@ func NewPostgresConnection(cfg *config.Config) (*DB, error) {
 }
 
 func (db *DB) RunMigrations() error {
+	src, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		return fmt.Errorf("failed to create migration source: %w", err)
+	}
+
 	driver, err := postgres.WithInstance(db.DB, &postgres.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to create migration driver: %w", err)
 	}
 
-	m, err := migrate.NewWithDatabaseInstance(
-		"file://migrations",
+	m, err := migrate.NewWithInstance(
+		"iofs",
+		src,
 		"postgres",
 		driver,
 	)
