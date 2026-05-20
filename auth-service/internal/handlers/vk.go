@@ -231,6 +231,8 @@ func fetchVKIDUserInfo(accessToken, clientID, deviceID string) (*vkUserInfo, err
 	var result struct {
 		Error string `json:"error"`
 		User  *struct {
+			ID        int64  `json:"id"`
+			UserID    int64  `json:"user_id"`
 			FirstName string `json:"first_name"`
 			LastName  string `json:"last_name"`
 		} `json:"user"`
@@ -244,9 +246,13 @@ func fetchVKIDUserInfo(accessToken, clientID, deviceID string) (*vkUserInfo, err
 	if result.User == nil {
 		return nil, fmt.Errorf("vk id user not found")
 	}
+	userID := result.User.UserID
+	if userID == 0 {
+		userID = result.User.ID
+	}
 
 	return &vkUserInfo{
-		ID:        0, // caller should still rely on SDK user_id for stable identifier
+		ID:        userID,
 		FirstName: strings.TrimSpace(result.User.FirstName),
 		LastName:  strings.TrimSpace(result.User.LastName),
 	}, nil

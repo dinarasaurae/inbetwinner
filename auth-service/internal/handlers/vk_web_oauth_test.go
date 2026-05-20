@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/url"
 	"testing"
 )
@@ -10,6 +11,7 @@ func TestBuildVKWebOAuthAuthorizeURL(t *testing.T) {
 		"54511648",
 		"https://inbetwin.ru/api/v1/auth/vk/callback",
 		"state-123",
+		"challenge-123",
 	)
 
 	parsed, err := url.Parse(authURL)
@@ -17,7 +19,7 @@ func TestBuildVKWebOAuthAuthorizeURL(t *testing.T) {
 		t.Fatalf("parse auth URL: %v", err)
 	}
 
-	if parsed.Scheme != "https" || parsed.Host != "oauth.vk.com" || parsed.Path != "/oauth/authorize" {
+	if parsed.Scheme != "https" || parsed.Host != "id.vk.com" || parsed.Path != "/authorize" {
 		t.Fatalf("unexpected auth URL: %s", authURL)
 	}
 
@@ -31,8 +33,39 @@ func TestBuildVKWebOAuthAuthorizeURL(t *testing.T) {
 	if got := q.Get("response_type"); got != "code" {
 		t.Fatalf("response_type = %q", got)
 	}
+	if got := q.Get("scope"); got != "vkid.personal_info" {
+		t.Fatalf("scope = %q", got)
+	}
 	if got := q.Get("state"); got != "state-123" {
 		t.Fatalf("state = %q", got)
+	}
+	if got := q.Get("code_challenge"); got != "challenge-123" {
+		t.Fatalf("code_challenge = %q", got)
+	}
+	if got := q.Get("code_challenge_method"); got != "S256" {
+		t.Fatalf("code_challenge_method = %q", got)
+	}
+}
+
+func TestVKWebTokenResponseUserID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want int64
+	}{
+		{name: "number", raw: `{"user_id":123}`, want: 123},
+		{name: "string", raw: `{"user_id":"456"}`, want: 456},
+		{name: "missing", raw: `{}`, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp vkWebTokenResponse
+			if err := json.Unmarshal([]byte(tc.raw), &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if got := resp.vkUserID(); got != tc.want {
+				t.Fatalf("vkUserID = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -3,9 +3,11 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,14 +19,15 @@ import (
 )
 
 const (
-	vkOAuthBaseURL     = "https://oauth.vk.com"
-	vkAPIVersion       = "5.199"
+	vkIDAuthURL        = "https://id.vk.com/authorize"
+	vkIDTokenURL       = "https://id.vk.ru/oauth2/auth"
 	vkWebOAuthStateTTL = 10 * time.Minute
 )
 
 type vkWebOAuthState struct {
-	ReturnURL string
-	ExpiresAt time.Time
+	ReturnURL    string
+	CodeVerifier string
+	ExpiresAt    time.Time
 }
 
 type vkWebOAuthStateStore struct {
@@ -36,7 +39,7 @@ func newVKWebOAuthStateStore() *vkWebOAuthStateStore {
 	return &vkWebOAuthStateStore{states: map[string]vkWebOAuthState{}}
 }
 
-func (s *vkWebOAuthStateStore) put(state, returnURL string, ttl time.Duration) {
+func (s *vkWebOAuthStateStore) put(state, returnURL, codeVerifier string, ttl time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -48,8 +51,9 @@ func (s *vkWebOAuthStateStore) put(state, returnURL string, ttl time.Duration) {
 	}
 
 	s.states[state] = vkWebOAuthState{
-		ReturnURL: returnURL,
-		ExpiresAt: now.Add(ttl),
+		ReturnURL:    returnURL,
+		CodeVerifier: codeVerifier,
+		ExpiresAt:    now.Add(ttl),
 	}
 }
 
@@ -70,9 +74,9 @@ func (s *vkWebOAuthStateStore) consume(state string) (vkWebOAuthState, bool) {
 // WebVKOAuthStart handles GET /auth/vk/start.
 // It starts the browser VK OAuth flow and stores a short-lived return URL nonce.
 func (h *VKAuthHandler) WebVKOAuthStart(c fiber.Ctx) error {
-	if strings.TrimSpace(h.vkWebClientID) == "" || strings.TrimSpace(h.vkWebClientSecret) == "" {
+	if strings.TrimSpace(h.vkWebClientID) == "" {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(
-			jwtlib.NewErrorResponse("vk_web_oauth_not_configured", "VK_APP_ID_WEB and VK_APP_SECRET_WEB are required"),
+			jwtlib.NewErrorResponse("vk_web_oauth_not_configured", "VK_APP_ID_WEB is required"),
 		)
 	}
 	if strings.TrimSpace(h.vkAuthRedirectURL) == "" {
@@ -94,15 +98,21 @@ func (h *VKAuthHandler) WebVKOAuthStart(c fiber.Ctx) error {
 			jwtlib.NewErrorResponse("state_generation_failed", err.Error()),
 		)
 	}
+	codeVerifier, codeChallenge, err := newPKCEPair()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(
+			jwtlib.NewErrorResponse("pkce_generation_failed", err.Error()),
+		)
+	}
 
-	h.webOAuthStates.put(state, returnURL, vkWebOAuthStateTTL)
+	h.webOAuthStates.put(state, returnURL, codeVerifier, vkWebOAuthStateTTL)
 
-	authURL := buildVKWebOAuthAuthorizeURL(h.vkWebClientID, h.vkAuthRedirectURL, state)
+	authURL := buildVKWebOAuthAuthorizeURL(h.vkWebClientID, h.vkAuthRedirectURL, state, codeChallenge)
 	return c.Redirect().To(authURL)
 }
 
 // WebVKOAuthCallback handles GET /auth/vk/callback.
-// VK redirects here with a legacy OAuth code, then we issue normal app JWTs.
+// VK redirects here with a VK ID OAuth code, then we issue normal app JWTs.
 func (h *VKAuthHandler) WebVKOAuthCallback(c fiber.Ctx) error {
 	state := c.Query("state")
 	pending, ok := h.webOAuthStates.consume(state)
@@ -122,18 +132,29 @@ func (h *VKAuthHandler) WebVKOAuthCallback(c fiber.Ctx) error {
 	if code == "" {
 		return c.Redirect().To(vkAuthReturnURLWithError(pending.ReturnURL, state, "missing_code"))
 	}
+	if pending.CodeVerifier == "" {
+		return c.Redirect().To(vkAuthReturnURLWithError(pending.ReturnURL, state, "missing_pkce_verifier"))
+	}
 
-	vkToken, err := h.exchangeVKWebOAuthCode(c.Context(), code)
+	deviceID := strings.TrimSpace(c.Query("device_id"))
+	vkToken, err := h.exchangeVKWebOAuthCode(c.Context(), code, deviceID, pending.CodeVerifier)
 	if err != nil {
 		return c.Redirect().To(vkAuthReturnURLWithError(pending.ReturnURL, state, err.Error()))
 	}
 
-	vkUser, err := fetchVKUserInfo(vkToken.AccessToken)
-	if err != nil {
-		vkUser = &vkUserInfo{ID: vkToken.UserID}
+	vkUser := &vkUserInfo{ID: vkToken.vkUserID()}
+	if deviceID != "" {
+		if verifiedUser, err := fetchVKIDUserInfo(vkToken.AccessToken, h.vkWebClientID, deviceID); err == nil {
+			if vkUser.ID != 0 {
+				verifiedUser.ID = vkUser.ID
+			}
+			vkUser = verifiedUser
+		}
 	}
 	if vkUser.ID == 0 {
-		vkUser.ID = vkToken.UserID
+		if legacyUser, err := fetchVKUserInfo(vkToken.AccessToken); err == nil {
+			vkUser = legacyUser
+		}
 	}
 	if vkUser.ID == 0 {
 		return c.Redirect().To(vkAuthReturnURLWithError(pending.ReturnURL, state, "vk_user_id_missing"))
@@ -154,24 +175,30 @@ func (h *VKAuthHandler) WebVKOAuthCallback(c fiber.Ctx) error {
 }
 
 type vkWebTokenResponse struct {
-	AccessToken      string `json:"access_token"`
-	ExpiresIn        int    `json:"expires_in"`
-	UserID           int64  `json:"user_id"`
-	Error            string `json:"error"`
-	ErrorDescription string `json:"error_description"`
+	AccessToken      string          `json:"access_token"`
+	ExpiresIn        int             `json:"expires_in"`
+	UserID           json.RawMessage `json:"user_id"`
+	Error            string          `json:"error"`
+	ErrorDescription string          `json:"error_description"`
 }
 
-func (h *VKAuthHandler) exchangeVKWebOAuthCode(ctx context.Context, code string) (*vkWebTokenResponse, error) {
+func (h *VKAuthHandler) exchangeVKWebOAuthCode(ctx context.Context, code, deviceID, codeVerifier string) (*vkWebTokenResponse, error) {
 	params := url.Values{}
+	params.Set("grant_type", "authorization_code")
 	params.Set("client_id", h.vkWebClientID)
-	params.Set("client_secret", h.vkWebClientSecret)
-	params.Set("redirect_uri", h.vkAuthRedirectURL)
 	params.Set("code", code)
+	params.Set("code_verifier", codeVerifier)
+	params.Set("redirect_uri", h.vkAuthRedirectURL)
+	params.Set("state", "")
+	if deviceID != "" {
+		params.Set("device_id", deviceID)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, vkOAuthBaseURL+"/access_token?"+params.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, vkIDTokenURL, strings.NewReader(params.Encode()))
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -180,8 +207,13 @@ func (h *VKAuthHandler) exchangeVKWebOAuthCode(ctx context.Context, code string)
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("vk token read failed: %w", err)
+	}
+
 	var result vkWebTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("vk token parse failed: %w", err)
 	}
 	if result.Error != "" {
@@ -198,16 +230,38 @@ func (h *VKAuthHandler) exchangeVKWebOAuthCode(ctx context.Context, code string)
 	return &result, nil
 }
 
-func buildVKWebOAuthAuthorizeURL(clientID, redirectURI, state string) string {
+func (r *vkWebTokenResponse) vkUserID() int64 {
+	if len(r.UserID) == 0 {
+		return 0
+	}
+
+	var numeric int64
+	if err := json.Unmarshal(r.UserID, &numeric); err == nil {
+		return numeric
+	}
+
+	var stringValue string
+	if err := json.Unmarshal(r.UserID, &stringValue); err == nil {
+		var parsed int64
+		if _, scanErr := fmt.Sscanf(stringValue, "%d", &parsed); scanErr == nil {
+			return parsed
+		}
+	}
+
+	return 0
+}
+
+func buildVKWebOAuthAuthorizeURL(clientID, redirectURI, state, codeChallenge string) string {
 	params := url.Values{}
 	params.Set("client_id", clientID)
-	params.Set("display", "page")
 	params.Set("redirect_uri", redirectURI)
 	params.Set("response_type", "code")
-	params.Set("v", vkAPIVersion)
+	params.Set("scope", "vkid.personal_info")
 	params.Set("state", state)
+	params.Set("code_challenge", codeChallenge)
+	params.Set("code_challenge_method", "S256")
 
-	return vkOAuthBaseURL + "/oauth/authorize?" + params.Encode()
+	return vkIDAuthURL + "?" + params.Encode()
 }
 
 func (h *VKAuthHandler) resolveVKAuthReturnURL(raw string) (string, bool) {
@@ -325,4 +379,15 @@ func randomURLSafeToken(byteCount int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func newPKCEPair() (verifier string, challenge string, err error) {
+	verifier, err = randomURLSafeToken(32)
+	if err != nil {
+		return "", "", err
+	}
+
+	sum := sha256.Sum256([]byte(verifier))
+	challenge = base64.RawURLEncoding.EncodeToString(sum[:])
+	return verifier, challenge, nil
 }
