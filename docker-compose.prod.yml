@@ -121,7 +121,7 @@ services:
       VK_APP_ID_WEB: ${VK_APP_ID_WEB}
       VK_APP_SECRET_WEB: ${VK_APP_SECRET_WEB}
       VK_AUTH_REDIRECT_URI: ${VK_AUTH_REDIRECT_URI:-https://${DOMAIN}/api/v1/auth/vk/callback}
-      VK_AUTH_ALLOWED_RETURN_URLS: ${VK_AUTH_ALLOWED_RETURN_URLS:-https://${DOMAIN}/app/auth/vk/callback,https://${DOMAIN}/auth/vk/callback,http://localhost:8080/auth/vk/callback}
+      VK_AUTH_ALLOWED_RETURN_URLS: ${VK_AUTH_ALLOWED_RETURN_URLS:-https://${DOMAIN}/app/auth/vk/callback,https://${DOMAIN}/auth/vk/callback}
       FRONTEND_URL: ${FRONTEND_URL:-https://${DOMAIN}/app}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
       GOOGLE_APPLICATION_CREDENTIALS: /app/secrets/firebase-adminsdk.json
