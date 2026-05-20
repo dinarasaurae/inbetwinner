@@ -9,7 +9,9 @@ import WebApp from './components/WebApp';
 
 function App() {
   const [isLoading, setIsLoading] = useState(true);
-  const isWebApp = window.location.pathname.startsWith('/app');
+  const isWebApp =
+    window.location.pathname.startsWith('/app') ||
+    window.location.pathname === '/auth/vk/callback';
 
   if (isWebApp) {
     return <WebApp />;
