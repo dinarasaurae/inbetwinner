@@ -6,6 +6,9 @@ import Navbar from './Navbar';
 const HeroSection: React.FC = () => {
   const nameRef = useRef<HTMLHeadingElement>(null);
   const blurRef = useRef<HTMLDivElement>(null);
+  const openWebApp = () => {
+    window.location.href = '/app';
+  };
 
   useEffect(() => {
     // GSAP Entrance Animations
@@ -71,8 +74,8 @@ const HeroSection: React.FC = () => {
 
           {/* CTA */}
           <div className="mt-10 mb-8 flex justify-start">
-            <Button variant="heroSecondary" className="px-[29px] py-[24px]">
-              Назначить демо
+            <Button variant="heroSecondary" className="px-[29px] py-[24px]" onClick={openWebApp}>
+              Открыть кабинет
             </Button>
           </div>
         </div>

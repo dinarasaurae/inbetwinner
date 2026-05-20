@@ -131,6 +131,18 @@ deploy:production:
           export IMAGE_PREFIX="$IMAGE_PREFIX"
           export IMAGE_TAG="$IMAGE_TAG"
 
+          # Build the Vite landing bundle that nginx serves from /var/www/landing/dist.
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          docker run --rm \
+            -e HOST_UID="$HOST_UID" \
+            -e HOST_GID="$HOST_GID" \
+            -e npm_config_cache=/tmp/.npm \
+            -v "$PWD/landing:/app" \
+            -w /app \
+            node:22-alpine \
+            sh -lc 'npm ci && npm run build && chown -R "$HOST_UID:$HOST_GID" /app/dist /app/node_modules'
+
           # Previous interrupted recreates can leave Compose temp containers named
           # like "db124a033186_inbetwin-redis", which block the next recreate.
           stale_compose_containers="$(

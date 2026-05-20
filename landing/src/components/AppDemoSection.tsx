@@ -35,7 +35,7 @@ const AppDemoSection: React.FC = () => {
   };
 
   useEffect(() => {
-    let timeouts: ReturnType<typeof setTimeout>[] = [];
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
     
     const startSequence = () => {
       setMessages([]);

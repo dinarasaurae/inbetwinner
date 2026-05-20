@@ -3,6 +3,10 @@ import { ChevronDown } from 'lucide-react';
 import { Button } from './ui/button';
 
 const Navbar: React.FC = () => {
+  const openWebApp = () => {
+    window.location.href = '/app';
+  };
+
   return (
     <div className="absolute top-0 left-0 right-0 z-50">
       <div className="flex w-full py-5 px-8 items-center justify-between">
@@ -36,7 +40,7 @@ const Navbar: React.FC = () => {
 
         {/* Right: Sign Up */}
         <div className="flex items-center">
-          <Button variant="heroSecondary" size="sm">
+          <Button variant="heroSecondary" size="sm" onClick={openWebApp}>
             Регистрация
           </Button>
         </div>

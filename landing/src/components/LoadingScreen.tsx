@@ -8,7 +8,7 @@ const LoadingScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => 
   const [wordIndex, setWordIndex] = useState(0);
 
   useEffect(() => {
-    let start = performance.now();
+    const start = performance.now();
     const duration = 2700;
 
     const animateCount = (now: number) => {

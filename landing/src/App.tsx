@@ -5,9 +5,15 @@ import AppDemoSection from './components/AppDemoSection';
 import FeaturesSection from './components/FeaturesSection';
 import Footer from './components/Footer';
 import LoadingScreen from './components/LoadingScreen';
+import WebApp from './components/WebApp';
 
 function App() {
   const [isLoading, setIsLoading] = useState(true);
+  const isWebApp = window.location.pathname.startsWith('/app');
+
+  if (isWebApp) {
+    return <WebApp />;
+  }
 
   if (isLoading) {
     return <LoadingScreen onComplete={() => setIsLoading(false)} />;
