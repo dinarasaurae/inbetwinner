@@ -37,3 +37,38 @@ func TestParseVKDecisionContentFencedJSON(t *testing.T) {
 		t.Fatalf("Rationale = %q, want fenced json", parsed.Rationale)
 	}
 }
+
+func TestFindStructuredTableAnswerDosage(t *testing.T) {
+	results := []ragSearchResult{
+		{
+			Text:   "продукт: Omega 3 (Мини 1320), срок_годности: 2 года, дозировка: Во время еды по 1-4 капсулы в день",
+			Source: "table",
+		},
+		{
+			Text:   "продукт: Л-Карнитин, срок_годности: 2 года, дозировка: По 1 капсуле в день во время еды",
+			Source: "table",
+		},
+	}
+
+	got, ok := findStructuredTableAnswer("какая дозировка Л-Карнитина?", results)
+	if !ok {
+		t.Fatal("expected structured table answer")
+	}
+	want := "Л-Карнитин: По 1 капсуле в день во время еды."
+	if got != want {
+		t.Fatalf("answer = %q, want %q", got, want)
+	}
+}
+
+func TestFindStructuredTableAnswerIgnoresNonMatchingProduct(t *testing.T) {
+	results := []ragSearchResult{
+		{
+			Text:   "продукт: Omega 3 (Мини 1320), срок_годности: 2 года, дозировка: Во время еды по 1-4 капсулы в день",
+			Source: "table",
+		},
+	}
+
+	if got, ok := findStructuredTableAnswer("какая дозировка Л-Карнитина?", results); ok {
+		t.Fatalf("expected no answer for mismatched product, got %q", got)
+	}
+}

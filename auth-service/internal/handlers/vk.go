@@ -18,10 +18,45 @@ type VKAuthHandler struct {
 	svc               *services.AuthService
 	jwtService        *jwtlib.Service
 	vkAndroidClientID string
+	vkWebClientID     string
+	vkWebClientSecret string
+	vkAuthRedirectURL string
+	frontendURL       string
+	allowedReturnURLs []string
+	webOAuthStates    *vkWebOAuthStateStore
 }
 
 func NewVKAuthHandler(svc *services.AuthService, jwtService *jwtlib.Service, vkAndroidClientID string) *VKAuthHandler {
-	return &VKAuthHandler{svc: svc, jwtService: jwtService, vkAndroidClientID: vkAndroidClientID}
+	return NewVKAuthHandlerWithOptions(svc, jwtService, VKAuthHandlerOptions{
+		VKAndroidClientID: vkAndroidClientID,
+	})
+}
+
+type VKAuthHandlerOptions struct {
+	VKAndroidClientID string
+	VKWebClientID     string
+	VKWebClientSecret string
+	VKAuthRedirectURL string
+	FrontendURL       string
+	AllowedReturnURLs []string
+}
+
+func NewVKAuthHandlerWithOptions(
+	svc *services.AuthService,
+	jwtService *jwtlib.Service,
+	opts VKAuthHandlerOptions,
+) *VKAuthHandler {
+	return &VKAuthHandler{
+		svc:               svc,
+		jwtService:        jwtService,
+		vkAndroidClientID: opts.VKAndroidClientID,
+		vkWebClientID:     opts.VKWebClientID,
+		vkWebClientSecret: opts.VKWebClientSecret,
+		vkAuthRedirectURL: opts.VKAuthRedirectURL,
+		frontendURL:       opts.FrontendURL,
+		allowedReturnURLs: opts.AllowedReturnURLs,
+		webOAuthStates:    newVKWebOAuthStateStore(),
+	}
 }
 
 // LoginWithVK handles POST /auth/vk
@@ -152,8 +187,12 @@ func tokenPreview(token string) string {
 }
 
 func fetchVKUserInfo(accessToken string) (*vkUserInfo, error) {
-	url := fmt.Sprintf("https://api.vk.com/method/users.get?access_token=%s&v=5.199&fields=", accessToken)
-	resp, err := http.Get(url) //nolint:gosec
+	params := url.Values{}
+	params.Set("access_token", accessToken)
+	params.Set("v", "5.199")
+	endpoint := "https://api.vk.com/method/users.get?" + params.Encode()
+
+	resp, err := http.Get(endpoint) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("vk api unreachable: %w", err)
 	}

@@ -37,10 +37,10 @@ type orchClient interface {
 // testVKService is a thin wrapper that exposes the dispatch logic with
 // injectable dependencies, without touching production DB code.
 type testVKService struct {
-	mode      string // legacy | llm_service | hybrid
-	llm       orchClient
-	legacyCh  chan string // writes "legacy" when legacy path is taken
-	llmCh     chan string // writes "llm" when llm path is taken
+	mode       string // legacy | llm_service | hybrid
+	llm        orchClient
+	legacyCh   chan string // writes "legacy" when legacy path is taken
+	llmCh      chan string // writes "llm" when llm path is taken
 	fallbackCh chan string // writes "fallback" when hybrid falls back
 }
 
@@ -288,6 +288,49 @@ func TestClassifyIntent_LegacyRegression(t *testing.T) {
 	}
 }
 
+func TestDraftFromKnowledge_ProductDosage(t *testing.T) {
+	knowledge := []string{
+		"продукт: Лецитин, срок_годности: 2 года, дозировка: По 2 капсулы в день во время еды,",
+		"продукт: Omega 3 (Мини 1320), срок_годности: 2 года, дозировка: Во время еды по 1-4 капсулы в день,",
+	}
+
+	got, ok := draftFromKnowledge("какой способ применения лецитина?", knowledge)
+	if !ok {
+		t.Fatal("expected knowledge-backed draft")
+	}
+	want := "Лецитин: По 2 капсулы в день во время еды."
+	if got != want {
+		t.Fatalf("draftFromKnowledge = %q, want %q", got, want)
+	}
+}
+
+func TestDraftFromKnowledge_IgnoresDifferentProduct(t *testing.T) {
+	knowledge := []string{
+		"продукт: Omega 3 (Мини 1320), срок_годности: 2 года, дозировка: Во время еды по 1-4 капсулы в день,",
+	}
+
+	if got, ok := draftFromKnowledge("какой способ применения лецитина?", knowledge); ok {
+		t.Fatalf("expected no answer for mismatched product, got %q", got)
+	}
+}
+
+func TestKnowledgeBackedFAQAutoReplyConfidence(t *testing.T) {
+	intent := classifyIntent("какой способ применения лецитина?")
+	source := "knowledge"
+	if source == "knowledge" && intent.Intent == "faq" {
+		intent.Confidence = maxFloat(intent.Confidence, 0.9)
+		intent.Safe = true
+		intent.Rationale = appendRationale(intent.Rationale, "Ответ найден в базе знаний.")
+	}
+
+	if intent.Confidence < 0.84 {
+		t.Fatalf("knowledge-backed faq confidence = %v, want >= 0.84", intent.Confidence)
+	}
+	if !intent.Safe {
+		t.Fatal("knowledge-backed faq should be safe")
+	}
+}
+
 // ── scoreLabel equivalent — VKDraftStatus is set correctly ───────────────────
 
 func TestVKDraftStatus_Constants(t *testing.T) {
@@ -313,6 +356,25 @@ func TestIsIntentAllowed(t *testing.T) {
 	}
 	if isIntentAllowed(safe, "handoff") {
 		t.Error("handoff should not be allowed")
+	}
+}
+
+func TestVKAgentSettingsUpdateRequest_AllowsPartialBooleanUpdates(t *testing.T) {
+	var req models.VKAgentSettingsUpdateRequest
+	if err := json.Unmarshal([]byte(`{"integration_id":"abc","rag_enabled":false}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.RAGEnabled == nil {
+		t.Fatal("rag_enabled should be present even when false")
+	}
+	if *req.RAGEnabled {
+		t.Fatal("rag_enabled should decode false")
+	}
+	if req.DraftFirst != nil {
+		t.Fatal("omitted draft_first should stay nil")
+	}
+	if req.AutoReplyEnabled != nil {
+		t.Fatal("omitted auto_reply_enabled should stay nil")
 	}
 }
 
@@ -402,7 +464,7 @@ func TestEffectiveOrchestrationMode_PerIntegrationOverridesGlobal(t *testing.T) 
 	}
 
 	d := &perIntegrationDispatcher{
-		globalMode:      "legacy",     // global = legacy
+		globalMode:      "legacy",      // global = legacy
 		integrationMode: "llm_service", // but THIS integration overrides to llm_service
 		llm:             stub,
 	}
@@ -471,18 +533,18 @@ func TestEffectiveOrchestrationMode_IntegrationHybrid_GlobalLegacy(t *testing.T)
 func TestVKLLMClient_HTTPAdapter(t *testing.T) {
 	agentID := uuid.New()
 	want := models.VKOrchestrationDecision{
-		Mode:             "draft",
-		DraftText:        "Добро пожаловать!",
-		Confidence:       0.93,
-		Intent:           "greeting",
-		SafeIntent:       true,
-		Rationale:        "Обычное приветствие",
+		Mode:              "draft",
+		DraftText:         "Добро пожаловать!",
+		Confidence:        0.93,
+		Intent:            "greeting",
+		SafeIntent:        true,
+		Rationale:         "Обычное приветствие",
 		KnowledgeSnippets: []string{"Компания основана в 2020 году"},
-		UsedTools:        []string{},
-		PromptTokens:     80,
-		CompletionTokens: 30,
-		TokensUsed:       110,
-		AgentID:          &agentID,
+		UsedTools:         []string{},
+		PromptTokens:      80,
+		CompletionTokens:  30,
+		TokensUsed:        110,
+		AgentID:           &agentID,
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

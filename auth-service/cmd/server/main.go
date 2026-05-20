@@ -45,7 +45,14 @@ func main() {
 	notificationService := services.NewNotificationService(db)
 
 	authHandler := handlers.NewAuthHandler(authService, jwtService)
-	vkAuthHandler := handlers.NewVKAuthHandler(authService, jwtService, cfg.VKAndroidClientID)
+	vkAuthHandler := handlers.NewVKAuthHandlerWithOptions(authService, jwtService, handlers.VKAuthHandlerOptions{
+		VKAndroidClientID: cfg.VKAndroidClientID,
+		VKWebClientID:     cfg.VKWebClientID,
+		VKWebClientSecret: cfg.VKWebClientSecret,
+		VKAuthRedirectURL: cfg.VKAuthRedirectURL,
+		FrontendURL:       cfg.FrontendURL,
+		AllowedReturnURLs: cfg.VKAuthReturnURLs,
+	})
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 
 	app := fiber.New(fiber.Config{
@@ -105,6 +112,8 @@ func main() {
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/refresh", authHandler.RefreshToken)
 	auth.Post("/vk", vkAuthHandler.LoginWithVK)
+	auth.Get("/vk/start", vkAuthHandler.WebVKOAuthStart)
+	auth.Get("/vk/callback", vkAuthHandler.WebVKOAuthCallback)
 
 	authProtected := auth.Group("", jwtlib.AuthMiddleware(jwtService))
 	authProtected.Get("/profile", authHandler.GetProfile)

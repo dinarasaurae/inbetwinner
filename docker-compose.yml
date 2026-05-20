@@ -102,6 +102,10 @@ services:
       YANDEX_REDIRECT_URL: ${YANDEX_REDIRECT_URL:-http://localhost:3001/api/v1/auth/oauth/yandex/callback}
 
       VK_APP_ID_ANDROID: ${VK_APP_ID_ANDROID:-54511649}
+      VK_APP_ID_WEB: ${VK_APP_ID_WEB:-54511648}
+      VK_APP_SECRET_WEB: ${VK_APP_SECRET_WEB:-}
+      VK_AUTH_REDIRECT_URI: ${VK_AUTH_REDIRECT_URI:-http://localhost:3001/api/v1/auth/vk/callback}
+      VK_AUTH_ALLOWED_RETURN_URLS: ${VK_AUTH_ALLOWED_RETURN_URLS:-http://localhost:8080/auth/vk/callback,http://localhost:3000/auth/vk/callback}
 
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
 

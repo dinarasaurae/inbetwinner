@@ -188,6 +188,7 @@ func main() {
 	vk.Post("/drafts/:draft_id/approve", vkHandler.ApproveDraft)
 	vk.Post("/message", vkHandler.SendMessage)
 	vk.Get("/lead/:vk_user_id", vkHandler.EnrichLead)
+	vk.Get("/leads/:vk_user_id/profile", vkHandler.EnrichLead)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

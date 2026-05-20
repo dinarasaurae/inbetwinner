@@ -168,6 +168,39 @@ func (s *LLMService) ProcessMessage(ctx context.Context, req ChatRequest) (*Chat
 			TotalTokens: 0,
 		}, nil
 	}
+	if tableAnswer, ok := findStructuredTableAnswer(req.Message, ragResults); ok {
+		_ = s.history.AppendMessage(ctx, models.ChatMessage{
+			WorkspaceID: req.WorkspaceID,
+			ChatUserID:  req.ChatUserID,
+			Platform:    req.Platform,
+			Role:        models.RoleUser,
+			Content:     req.Message,
+		})
+		_ = s.history.AppendMessage(ctx, models.ChatMessage{
+			WorkspaceID: req.WorkspaceID,
+			ChatUserID:  req.ChatUserID,
+			Platform:    req.Platform,
+			Role:        models.RoleAssistant,
+			Content:     tableAnswer,
+		})
+		s.scoring.ScoreAsync(req.WorkspaceID, req.ChatUserID, req.Platform, req.Message, func(score *ScoreResult) {
+			s.push.SendAsync(req.WorkspaceID, NotifHotLead,
+				"🔥 Горячий лид!",
+				fmt.Sprintf("Пользователь %s (%s) набрал %d баллов", req.ChatUserID, req.Platform, score.Score),
+				map[string]string{
+					"chat_user_id": req.ChatUserID,
+					"platform":     req.Platform,
+					"score":        fmt.Sprintf("%d", score.Score),
+				},
+			)
+		})
+		return &ChatResponse{
+			AgentID:     agentID,
+			Response:    tableAnswer,
+			ToolsUsed:   nil,
+			TotalTokens: 0,
+		}, nil
+	}
 
 	// 4. Resolve tool list (filtered by agent's allowlist).
 	hasCalendar := s.registry.HasGoogleCalendar(ctx, req.WorkspaceID)
@@ -516,6 +549,150 @@ func findStrictQAAnswer(query string, results []ragSearchResult) (string, bool) 
 	return "", false
 }
 
+func findStructuredTableAnswer(query string, results []ragSearchResult) (string, bool) {
+	normalizedQuery := normalizeKnowledgeText(query)
+	preferredKeys := preferredKnowledgeKeys(normalizedQuery)
+	if len(preferredKeys) == 0 {
+		return "", false
+	}
+
+	for _, r := range results {
+		if r.Source != "table" {
+			continue
+		}
+		fields := parseKnowledgeFields(r.Text)
+		if len(fields) == 0 {
+			continue
+		}
+
+		product := firstKnowledgeField(fields, "продукт", "товар", "название", "name")
+		if product != "" && !knowledgeProductMatches(normalizedQuery, product) {
+			continue
+		}
+
+		value := firstKnowledgeField(fields, preferredKeys...)
+		if value == "" {
+			continue
+		}
+		if product != "" {
+			return ensureFinalPunctuation(product + ": " + value), true
+		}
+		return ensureFinalPunctuation(value), true
+	}
+	return "", false
+}
+
+func preferredKnowledgeKeys(normalizedQuery string) []string {
+	var keys []string
+	if containsKnowledgeAny(normalizedQuery, "способ применения", "как применять", "как принимать", "применять", "принимать", "дозиров", "капсул") {
+		keys = append(keys, "способ применения", "применение", "дозировка")
+	}
+	if containsKnowledgeAny(normalizedQuery, "срок годности", "годен", "годна", "хранить", "хранение") {
+		keys = append(keys, "срок годности", "годен до", "хранение")
+	}
+	return keys
+}
+
+func parseKnowledgeFields(snippet string) map[string]string {
+	fields := map[string]string{}
+	currentKey := ""
+	for _, part := range strings.Split(snippet, ",") {
+		key, value, ok := strings.Cut(part, ":")
+		if ok {
+			normalizedKey := normalizeKnowledgeFieldKey(key)
+			trimmedValue := strings.Trim(strings.TrimSpace(value), ".;")
+			if normalizedKey != "" {
+				currentKey = normalizedKey
+				if trimmedValue != "" {
+					fields[currentKey] = trimmedValue
+				}
+				continue
+			}
+		}
+
+		if currentKey == "" {
+			continue
+		}
+		extra := strings.Trim(strings.TrimSpace(part), ".;")
+		if extra == "" {
+			continue
+		}
+		if fields[currentKey] == "" {
+			fields[currentKey] = extra
+		} else {
+			fields[currentKey] += ", " + extra
+		}
+	}
+	return fields
+}
+
+func normalizeKnowledgeFieldKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "_", " ")
+	return strings.Join(strings.Fields(key), " ")
+}
+
+func firstKnowledgeField(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(fields[normalizeKnowledgeFieldKey(key)]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func knowledgeProductMatches(normalizedQuery, product string) bool {
+	normalizedProduct := normalizeKnowledgeText(product)
+	if normalizedProduct == "" {
+		return true
+	}
+	if strings.Contains(normalizedQuery, normalizedProduct) {
+		return true
+	}
+	for _, token := range strings.Fields(normalizedProduct) {
+		if len([]rune(token)) >= 4 && strings.Contains(normalizedQuery, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeKnowledgeText(value string) string {
+	value = strings.ToLower(strings.ReplaceAll(value, "ё", "е"))
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'а' && r <= 'я', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func containsKnowledgeAny(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, normalizeKnowledgeText(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureFinalPunctuation(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+	switch text[len(text)-1] {
+	case '.', '!', '?':
+		return text
+	default:
+		return text + "."
+	}
+}
+
 func normalizeKnowledgeQuery(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
@@ -716,6 +893,36 @@ func (s *LLMService) ProcessSocialMessage(ctx context.Context, req SocialMessage
 			Intent:            "faq",
 			SafeIntent:        true,
 			Rationale:         "strict qa exact match",
+			KnowledgeSnippets: snippets,
+			PromptTokens:      0,
+			CompletionTokens:  0,
+			TokensUsed:        0,
+			AgentID:           agentID,
+		}, nil
+	}
+	if tableAnswer, ok := findStructuredTableAnswer(req.Message, ragResults); ok {
+		mode := "draft"
+		if req.Context == nil || req.Context.AutoReplyEnabled {
+			mode = "auto_reply"
+		}
+		s.scoring.ScoreAsync(req.WorkspaceID, req.ChatUserID, req.Platform, req.Message, func(score *ScoreResult) {
+			s.push.SendAsync(req.WorkspaceID, NotifHotLead,
+				"🔥 Горячий лид!",
+				fmt.Sprintf("Пользователь %s (%s) набрал %d баллов", req.ChatUserID, req.Platform, score.Score),
+				map[string]string{
+					"chat_user_id": req.ChatUserID,
+					"platform":     req.Platform,
+					"score":        fmt.Sprintf("%d", score.Score),
+				},
+			)
+		})
+		return &VKOrchestrationDecision{
+			Mode:              mode,
+			DraftText:         tableAnswer,
+			Confidence:        1.0,
+			Intent:            "faq",
+			SafeIntent:        true,
+			Rationale:         "structured table match",
 			KnowledgeSnippets: snippets,
 			PromptTokens:      0,
 			CompletionTokens:  0,

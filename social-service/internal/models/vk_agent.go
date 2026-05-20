@@ -98,14 +98,14 @@ type VKAgentSettings struct {
 }
 
 type VKAgentSettingsUpdateRequest struct {
-	IntegrationID     string   `json:"integration_id"`
-	DraftFirst        bool     `json:"draft_first"`
-	AutoReplyEnabled  bool     `json:"auto_reply_enabled"`
-	SafeIntents       []string `json:"safe_intents"`
-	ToneOfVoice       string   `json:"tone_of_voice"`
-	ForbiddenPromises []string `json:"forbidden_promises"`
-	EscalationPolicy  string   `json:"escalation_policy"`
-	RAGEnabled        bool     `json:"rag_enabled"`
+	IntegrationID     string    `json:"integration_id"`
+	DraftFirst        *bool     `json:"draft_first,omitempty"`
+	AutoReplyEnabled  *bool     `json:"auto_reply_enabled,omitempty"`
+	SafeIntents       *[]string `json:"safe_intents,omitempty"`
+	ToneOfVoice       *string   `json:"tone_of_voice,omitempty"`
+	ForbiddenPromises *[]string `json:"forbidden_promises,omitempty"`
+	EscalationPolicy  *string   `json:"escalation_policy,omitempty"`
+	RAGEnabled        *bool     `json:"rag_enabled,omitempty"`
 }
 
 type VKDraftStatus string

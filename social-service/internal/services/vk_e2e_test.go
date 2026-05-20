@@ -105,10 +105,10 @@ func testConfig(llmServiceURL, orchMode string) *config.Config {
 
 // e2eFixtures holds IDs seeded for one test run.
 type e2eFixtures struct {
-	userID      uuid.UUID
-	integID     uuid.UUID
-	msgID       uuid.UUID
-	draftID     uuid.UUID // populated by seedDraft
+	userID  uuid.UUID
+	integID uuid.UUID
+	msgID   uuid.UUID
+	draftID uuid.UUID // populated by seedDraft
 }
 
 // seedBase creates a VK integration + agent settings + one inbound message.
@@ -194,10 +194,10 @@ func cleanupFixtures(t *testing.T, db *database.DB, f e2eFixtures) {
 	t.Helper()
 	ctx := context.Background()
 	// Delete in dependency order (drafts → messages → settings → integration).
-	db.ExecContext(ctx, `DELETE FROM vk_reply_drafts WHERE integration_id=$1`, f.integID)    //nolint
-	db.ExecContext(ctx, `DELETE FROM vk_messages WHERE integration_id=$1`, f.integID)         //nolint
-	db.ExecContext(ctx, `DELETE FROM vk_agent_settings WHERE integration_id=$1`, f.integID)   //nolint
-	db.ExecContext(ctx, `DELETE FROM vk_integrations WHERE id=$1`, f.integID)                  //nolint
+	db.ExecContext(ctx, `DELETE FROM vk_reply_drafts WHERE integration_id=$1`, f.integID)   //nolint
+	db.ExecContext(ctx, `DELETE FROM vk_messages WHERE integration_id=$1`, f.integID)       //nolint
+	db.ExecContext(ctx, `DELETE FROM vk_agent_settings WHERE integration_id=$1`, f.integID) //nolint
+	db.ExecContext(ctx, `DELETE FROM vk_integrations WHERE id=$1`, f.integID)               //nolint
 }
 
 // mockLLMServer spins up an httptest server that returns the given decision JSON.
@@ -273,18 +273,18 @@ func TestE2E_LLMService_Success_DraftPersisted(t *testing.T) {
 
 	agentID := uuid.New()
 	decision := &models.VKOrchestrationDecision{
-		Mode:             "draft",
-		DraftText:        "Наш базовый тариф стоит 5 000 ₽/мес.",
-		Confidence:       0.92,
-		Intent:           "basic_prices",
-		SafeIntent:       true,
-		Rationale:        "Вопрос о базовом тарифе — safe intent",
+		Mode:              "draft",
+		DraftText:         "Наш базовый тариф стоит 5 000 ₽/мес.",
+		Confidence:        0.92,
+		Intent:            "basic_prices",
+		SafeIntent:        true,
+		Rationale:         "Вопрос о базовом тарифе — safe intent",
 		KnowledgeSnippets: []string{"Тариф Базовый: 5 000 ₽/мес"},
-		UsedTools:        []string{},
-		PromptTokens:     85,
-		CompletionTokens: 32,
-		TokensUsed:       117,
-		AgentID:          &agentID,
+		UsedTools:         []string{},
+		PromptTokens:      85,
+		CompletionTokens:  32,
+		TokensUsed:        117,
+		AgentID:           &agentID,
 	}
 
 	llmSrv := mockLLMServer(t, decision)
@@ -461,13 +461,13 @@ func TestE2E_AutoReply_SafeIntent_AutoSent(t *testing.T) {
 	vkpkg.APIBase = vkSrv.URL
 
 	decision := &models.VKOrchestrationDecision{
-		Mode:       "auto_reply", // triggers auto-send
-		DraftText:  "Наш офис работает с 9 до 18, пн–пт.",
-		Confidence: 0.97,
-		Intent:     "hours",
-		SafeIntent: true,
-		Rationale:  "Safe intent: hours of operation",
-		UsedTools:  []string{},
+		Mode:             "auto_reply", // triggers auto-send
+		DraftText:        "Наш офис работает с 9 до 18, пн–пт.",
+		Confidence:       0.97,
+		Intent:           "hours",
+		SafeIntent:       true,
+		Rationale:        "Safe intent: hours of operation",
+		UsedTools:        []string{},
 		PromptTokens:     40,
 		CompletionTokens: 15,
 		TokensUsed:       55,
@@ -476,6 +476,15 @@ func TestE2E_AutoReply_SafeIntent_AutoSent(t *testing.T) {
 	llmSrv := mockLLMServer(t, decision)
 	// auto_reply_enabled=TRUE so the service sends without approval.
 	f := seedBase(t, db, enc, "llm_service", true)
+	_, err = db.ExecContext(context.Background(), `
+		UPDATE vk_agent_settings
+		   SET draft_first=FALSE
+		 WHERE integration_id=$1`,
+		f.integID,
+	)
+	if err != nil {
+		t.Fatalf("disable draft_first: %v", err)
+	}
 	cfg := testConfig(llmSrv.URL, "llm_service")
 	svc := buildVKService(db, enc, cfg)
 

@@ -49,8 +49,41 @@ func (s *VKService) UpdateAgentSettings(ctx context.Context, userID uuid.UUID, r
 		return nil, err
 	}
 
-	if len(req.SafeIntents) == 0 {
-		req.SafeIntents = []string{"faq", "hours", "basic_prices", "qualification"}
+	current, err := s.ensureAgentSettings(ctx, integID)
+	if err != nil {
+		return nil, err
+	}
+
+	draftFirst := current.DraftFirst
+	if req.DraftFirst != nil {
+		draftFirst = *req.DraftFirst
+	}
+	autoReplyEnabled := current.AutoReplyEnabled
+	if req.AutoReplyEnabled != nil {
+		autoReplyEnabled = *req.AutoReplyEnabled
+	}
+	safeIntents := current.SafeIntents
+	if req.SafeIntents != nil {
+		safeIntents = *req.SafeIntents
+	}
+	if len(safeIntents) == 0 {
+		safeIntents = []string{"faq", "hours", "basic_prices", "qualification"}
+	}
+	toneOfVoice := current.ToneOfVoice
+	if req.ToneOfVoice != nil {
+		toneOfVoice = *req.ToneOfVoice
+	}
+	forbiddenPromises := current.ForbiddenPromises
+	if req.ForbiddenPromises != nil {
+		forbiddenPromises = *req.ForbiddenPromises
+	}
+	escalationPolicy := current.EscalationPolicy
+	if req.EscalationPolicy != nil {
+		escalationPolicy = *req.EscalationPolicy
+	}
+	ragEnabled := current.RAGEnabled
+	if req.RAGEnabled != nil {
+		ragEnabled = *req.RAGEnabled
 	}
 
 	settings := &models.VKAgentSettings{}
@@ -68,7 +101,7 @@ func (s *VKService) UpdateAgentSettings(ctx context.Context, userID uuid.UUID, r
 			rag_enabled=EXCLUDED.rag_enabled,
 			updated_at=NOW()
 		RETURNING id, integration_id, draft_first, auto_reply_enabled, safe_intents, tone_of_voice, forbidden_promises, escalation_policy, rag_enabled, orchestration_mode, created_at, updated_at
-	`, integID, req.DraftFirst, req.AutoReplyEnabled, pq.Array(req.SafeIntents), req.ToneOfVoice, pq.Array(req.ForbiddenPromises), req.EscalationPolicy, req.RAGEnabled).
+	`, integID, draftFirst, autoReplyEnabled, pq.Array(safeIntents), toneOfVoice, pq.Array(forbiddenPromises), escalationPolicy, ragEnabled).
 		Scan(&settings.ID, &settings.IntegrationID, &settings.DraftFirst, &settings.AutoReplyEnabled, pq.Array(&settings.SafeIntents), &settings.ToneOfVoice, pq.Array(&settings.ForbiddenPromises), &settings.EscalationPolicy, &settings.RAGEnabled, &settings.OrchestrationMode, &settings.CreatedAt, &settings.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -306,7 +339,7 @@ func (s *VKService) processInboundMessageLLM(ctx context.Context, userID, integr
 	}
 
 	// Auto-send if orchestrator says auto_reply and policy allows.
-	if decision.Mode == "auto_reply" && settings.AutoReplyEnabled {
+	if decision.Mode == "auto_reply" && settings.AutoReplyEnabled && !settings.DraftFirst {
 		sentID, sendErr := s.sendMessageInternal(ctx, userID, integrationID, inbound.FromVKUserID, inbound.PeerID, draft.DraftText)
 		if sendErr != nil {
 			draft.Status = models.VKDraftStatusFailed
@@ -371,6 +404,11 @@ func (s *VKService) generateDraftForMessage(
 		knowledge = s.searchKnowledge(ctx, userID, inbound.Text)
 	}
 	draftText, source := s.composeDraft(ctx, workspace.BusinessSnapshot, settings, inbound.Text, intent, knowledge)
+	if source == "knowledge" && intent.Intent == "faq" {
+		intent.Confidence = maxFloat(intent.Confidence, 0.9)
+		intent.Safe = true
+		intent.Rationale = appendRationale(intent.Rationale, "Ответ найден в базе знаний.")
+	}
 
 	draft := &models.VKReplyDraft{
 		IntegrationID:     integrationID,
@@ -387,7 +425,7 @@ func (s *VKService) generateDraftForMessage(
 		KnowledgeSnippets: knowledge,
 	}
 
-	if allowAutoSend && settings.AutoReplyEnabled && isIntentAllowed(settings.SafeIntents, intent.Intent) && intent.Safe && intent.Confidence >= 0.84 {
+	if allowAutoSend && settings.AutoReplyEnabled && !settings.DraftFirst && isIntentAllowed(settings.SafeIntents, intent.Intent) && intent.Safe && intent.Confidence >= 0.84 {
 		sentID, sendErr := s.sendMessageInternal(ctx, userID, integrationID, inbound.FromVKUserID, inbound.PeerID, draft.DraftText)
 		if sendErr != nil {
 			draft.Status = models.VKDraftStatusFailed
@@ -459,6 +497,9 @@ func (s *VKService) persistDraftWithObs(ctx context.Context, draft *models.VKRep
 }
 
 func (s *VKService) composeDraft(ctx context.Context, snapshot *models.VKBusinessSnapshot, settings *models.VKAgentSettings, userMessage string, decision intentDecision, knowledge []string) (string, string) {
+	if text, ok := draftFromKnowledge(userMessage, knowledge); ok {
+		return text, "knowledge"
+	}
 	if s.draftProvider == nil || s.cfg.LLMAPIKey == "" {
 		return templateDraft(snapshot, settings, userMessage, decision), "template"
 	}
@@ -480,6 +521,144 @@ func (s *VKService) composeDraft(ctx context.Context, snapshot *models.VKBusines
 		return templateDraft(snapshot, settings, userMessage, decision), "template"
 	}
 	return text, s.draftProvider.Name()
+}
+
+func draftFromKnowledge(userMessage string, knowledge []string) (string, bool) {
+	if len(knowledge) == 0 {
+		return "", false
+	}
+
+	query := normalizeKnowledgeText(userMessage)
+	preferredKeys := preferredKnowledgeKeys(query)
+	if len(preferredKeys) == 0 {
+		return "", false
+	}
+
+	for _, snippet := range knowledge {
+		fields := parseKnowledgeFields(snippet)
+		if len(fields) == 0 {
+			continue
+		}
+
+		product := firstKnowledgeField(fields, "продукт", "товар", "название", "name")
+		if product != "" && !knowledgeProductMatches(query, product) {
+			continue
+		}
+
+		value := firstKnowledgeField(fields, preferredKeys...)
+		if value == "" {
+			continue
+		}
+		if product != "" {
+			return ensureFinalPunctuation(product + ": " + value), true
+		}
+		return ensureFinalPunctuation(value), true
+	}
+	return "", false
+}
+
+func preferredKnowledgeKeys(normalizedQuery string) []string {
+	var keys []string
+	if containsAny(normalizedQuery, "способ применения", "как применять", "как принимать", "применять", "принимать", "дозиров", "капсул") {
+		keys = append(keys, "способ применения", "применение", "дозировка")
+	}
+	if containsAny(normalizedQuery, "срок годности", "годен", "годна", "хранить", "хранение") {
+		keys = append(keys, "срок годности", "годен до", "хранение")
+	}
+	return keys
+}
+
+func parseKnowledgeFields(snippet string) map[string]string {
+	fields := map[string]string{}
+	for _, part := range strings.Split(snippet, ",") {
+		key, value, ok := strings.Cut(part, ":")
+		if !ok {
+			continue
+		}
+		key = normalizeKnowledgeFieldKey(key)
+		value = strings.Trim(strings.TrimSpace(value), ".;")
+		if key != "" && value != "" {
+			fields[key] = value
+		}
+	}
+	return fields
+}
+
+func normalizeKnowledgeFieldKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "_", " ")
+	return strings.Join(strings.Fields(key), " ")
+}
+
+func firstKnowledgeField(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(fields[normalizeKnowledgeFieldKey(key)]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func knowledgeProductMatches(normalizedQuery, product string) bool {
+	normalizedProduct := normalizeKnowledgeText(product)
+	if normalizedProduct == "" {
+		return true
+	}
+	if strings.Contains(normalizedQuery, normalizedProduct) {
+		return true
+	}
+	for _, token := range strings.Fields(normalizedProduct) {
+		if len([]rune(token)) >= 4 && strings.Contains(normalizedQuery, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeKnowledgeText(value string) string {
+	value = strings.ToLower(strings.ReplaceAll(value, "ё", "е"))
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'а' && r <= 'я', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func ensureFinalPunctuation(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+	switch text[len(text)-1] {
+	case '.', '!', '?':
+		return text
+	default:
+		return text + "."
+	}
+}
+
+func appendRationale(existing, addition string) string {
+	existing = strings.TrimSpace(existing)
+	addition = strings.TrimSpace(addition)
+	if existing == "" {
+		return addition
+	}
+	if addition == "" {
+		return existing
+	}
+	return existing + " " + addition
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func buildSystemPrompt(snapshot *models.VKBusinessSnapshot, settings *models.VKAgentSettings, decision intentDecision, knowledge []string) string {

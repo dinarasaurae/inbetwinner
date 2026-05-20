@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -32,6 +33,10 @@ type Config struct {
 	YandexRedirectURL  string
 
 	VKAndroidClientID string
+	VKWebClientID     string
+	VKWebClientSecret string
+	VKAuthRedirectURL string
+	VKAuthReturnURLs  []string
 
 	FrontendURL string
 }
@@ -79,6 +84,10 @@ func Load() *Config {
 		YandexRedirectURL:  getEnv("YANDEX_REDIRECT_URL", "http://localhost:3001/api/v1/auth/oauth/yandex/callback"),
 
 		VKAndroidClientID: getEnv("VK_APP_ID_ANDROID", "54511649"),
+		VKWebClientID:     getEnv("VK_APP_ID_WEB", ""),
+		VKWebClientSecret: getEnv("VK_APP_SECRET_WEB", ""),
+		VKAuthRedirectURL: getEnv("VK_AUTH_REDIRECT_URI", "http://localhost:3001/api/v1/auth/vk/callback"),
+		VKAuthReturnURLs:  splitEnvList(getEnv("VK_AUTH_ALLOWED_RETURN_URLS", "")),
 
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 	}
@@ -90,6 +99,22 @@ func getEnv(key, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func splitEnvList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func (c *Config) GetDatabaseURL() string {
