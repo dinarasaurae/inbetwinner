@@ -1,0 +1,108 @@
+groups:
+  - name: inbetwin-nfr-evidence
+    rules:
+      - alert: InbetwinServiceUnavailable
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          nfr: availability
+        annotations:
+          summary: "{{ $labels.service }} is not responding to health checks"
+          description: "The {{ $labels.service }} health endpoint has failed for more than 2 minutes."
+
+      - alert: InbetwinAvailabilityBelowTarget
+        expr: avg_over_time(probe_success{job="blackbox-http"}[30m]) * 100 < 99
+        for: 5m
+        labels:
+          severity: warning
+          nfr: availability
+        annotations:
+          summary: "{{ $labels.service }} availability is below the 99% evidence target"
+          description: "The observed 30 minute availability for {{ $labels.service }} dropped below 99%."
+
+      - alert: InbetwinHealthLatencyHigh
+        expr: probe_duration_seconds{job="blackbox-http"} > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          nfr: performance
+        annotations:
+          summary: "{{ $labels.service }} health latency is above 500 ms"
+          description: "The health probe for {{ $labels.service }} is slower than the presentation SLO threshold."
+
+      - alert: InbetwinGatewayP95LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(inbetwin_api_gateway_http_request_duration_seconds_bucket{route!="/metrics"}[5m])
+            )
+          ) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+          nfr: performance
+        annotations:
+          summary: "API Gateway p95 latency is above 300 ms"
+          description: "The observed p95 request latency at the API Gateway is above the target threshold."
+
+      - alert: InbetwinGatewayErrorRateHigh
+        expr: |
+          (
+            sum(rate(inbetwin_api_gateway_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(inbetwin_api_gateway_http_requests_total[5m])), 1)
+          ) * 100 > 1
+        for: 5m
+        labels:
+          severity: warning
+          nfr: reliability
+        annotations:
+          summary: "API Gateway 5xx error rate is above 1%"
+          description: "The API Gateway error budget is being consumed faster than expected."
+
+      - alert: InbetwinContainerCpuHigh
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            rate(container_cpu_usage_seconds_total{
+              container_label_com_docker_compose_service=~"api-gateway|auth-service|social-service|agent-service|rag-service|llm-service|lead-scoring-service|postgres|redis|rabbitmq|minio"
+            }[5m])
+          ) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+          nfr: capacity
+        annotations:
+          summary: "{{ $labels.container_label_com_docker_compose_service }} CPU is above 80%"
+          description: "Container CPU saturation stayed above 80% for 10 minutes."
+
+      - alert: InbetwinPostgresExporterDown
+        expr: pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          nfr: reliability
+        annotations:
+          summary: "PostgreSQL exporter cannot reach the database"
+          description: "PostgreSQL availability or exporter connectivity is degraded."
+
+      - alert: InbetwinRedisExporterDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          nfr: reliability
+        annotations:
+          summary: "Redis exporter cannot reach Redis"
+          description: "Redis availability or exporter connectivity is degraded."
+
+      - alert: InbetwinRabbitMQMetricsDown
+        expr: up{job="rabbitmq"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          nfr: reliability
+        annotations:
+          summary: "Prometheus cannot scrape RabbitMQ metrics"
+          description: "RabbitMQ availability or the built-in Prometheus plugin is degraded."

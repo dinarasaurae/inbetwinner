@@ -3,7 +3,7 @@
 # inBeTwin — top-level Makefile
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help up down logs test-integration test-unit test-provider clean
+.PHONY: help up down logs monitoring-up monitoring-down monitoring-logs test-integration test-unit test-provider clean
 
 # ── Local stack ───────────────────────────────────────────────────────────────
 
@@ -12,6 +12,9 @@ help:
 	@echo "  make up                  — start full docker compose stack"
 	@echo "  make down                — stop and remove containers"
 	@echo "  make logs                — tail logs from all services"
+	@echo "  make monitoring-up       — start stack with Prometheus + Grafana"
+	@echo "  make monitoring-down     — stop stack with monitoring overlay"
+	@echo "  make monitoring-logs     — tail monitoring logs"
 	@echo ""
 	@echo "  make test-unit           — run pure unit tests (no DB, no network)"
 	@echo "  make test-provider       — run LLM provider unit tests in llm-service"
@@ -27,6 +30,15 @@ down:
 
 logs:
 	docker compose logs -f
+
+monitoring-up:
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --build
+
+monitoring-down:
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
+
+monitoring-logs:
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml logs -f prometheus grafana blackbox-exporter cadvisor postgres-exporter redis-exporter rabbitmq
 
 # ── Unit tests (no Docker required) ───────────────────────────────────────────
 

@@ -11,14 +11,17 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/adaptor"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
 	"github.com/gofiber/fiber/v3/middleware/logger"
 	"github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/dinarasaurae/inbetwin-api-gateway/internal/config"
 	"github.com/dinarasaurae/inbetwin-api-gateway/internal/handlers"
+	"github.com/dinarasaurae/inbetwin-api-gateway/internal/metrics"
 	"github.com/dinarasaurae/inbetwin-api-gateway/internal/proxy"
 	jwtlib "github.com/dinarasaurae/inbetwin-shared/jwt-go"
 )
@@ -89,6 +92,9 @@ func main() {
 		AllowCredentials: false,
 		MaxAge:           3600,
 	}))
+
+	app.Get("/metrics", adaptor.HTTPHandler(promhttp.HandlerFor(metrics.Registry(), promhttp.HandlerOpts{})))
+	app.Use(metrics.HTTPMiddleware())
 
 	app.Use(limiter.New(limiter.Config{
 		Max:        cfg.RateLimitMax,
