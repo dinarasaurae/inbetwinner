@@ -156,6 +156,12 @@ deploy:production:
           # Pull new images and restart
           docker compose -f docker-compose.prod.yml pull
           docker compose -f docker-compose.prod.yml up -d --remove-orphans --no-build
+
+          # Start local-only monitoring after the application stack is updated.
+          # Grafana and Prometheus ports are bound to 127.0.0.1 by docker-compose.monitoring.yml.
+          docker compose -f docker-compose.prod.yml -f docker-compose.monitoring.yml pull prometheus grafana blackbox-exporter cadvisor postgres-exporter redis-exporter rabbitmq
+          docker compose -f docker-compose.prod.yml -f docker-compose.monitoring.yml up -d --no-build
+
           docker compose -f docker-compose.prod.yml restart nginx
 
           # Clean up dangling images
