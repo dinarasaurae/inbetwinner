@@ -71,7 +71,7 @@ const AppDemoSection: React.FC = () => {
             transition={{ duration: 0.6 }}
           >
             <h2 className="text-4xl md:text-5xl font-display text-foreground font-bold mb-6">
-              Клиенты получают ответ <span className="text-transparent bg-clip-text accent-gradient inline-block">сразу</span>
+              Клиенты получают ответ <span className="accent-text-gradient inline-block">сразу</span>
             </h2>
             <p className="text-muted-foreground text-lg leading-relaxed mb-8">
               Агент понимает вопрос клиента, отвечает в стиле компании и фиксирует результат в CRM. Менеджер видит готовый контекст и подключается только там, где нужен человек.
