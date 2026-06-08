@@ -257,7 +257,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(rate(inbetwin_api_gateway_http_requests_total{status=~\"5..\"}[$__rate_interval])) / clamp_min(sum(rate(inbetwin_api_gateway_http_requests_total[$__rate_interval])), 1)) * 100",
+          "expr": "((sum(rate(inbetwin_api_gateway_http_requests_total{status=~\"5..\"}[$__rate_interval])) or vector(0)) / clamp_min((sum(rate(inbetwin_api_gateway_http_requests_total[$__rate_interval])) or vector(0)), 1)) * 100",
           "legendFormat": "5xx",
           "range": true,
           "refId": "A"
