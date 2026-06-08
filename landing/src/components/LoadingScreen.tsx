@@ -41,7 +41,7 @@ const LoadingScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => 
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.8 }}
       >
-        inBeTwin Space
+        <img src="/inbetwin-logo.png" alt="inBeTwin" className="h-12 w-auto brightness-0 invert" />
       </motion.div>
 
       <div className="flex-1 flex items-center justify-center">

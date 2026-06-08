@@ -915,14 +915,8 @@ const WebApp: React.FC = () => {
     <main className="min-h-screen bg-[#040b1b] text-[#e7edff]">
       <div className="flex min-h-screen">
         <aside className="hidden w-[304px] shrink-0 flex-col border-r border-[#25314f] bg-[#071022] px-5 py-6 lg:flex">
-          <a href="/" className="mb-8 flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-[14px] bg-[#e7edff] text-[#071022]">
-              <Sparkles size={20} />
-            </div>
-            <div>
-              <div className="font-display text-3xl italic leading-none">inBeTwin</div>
-              <div className="mt-1 text-sm text-[#8e9ab8]">AI Agent</div>
-            </div>
+          <a href="/" className="mb-8 flex items-center">
+            <img src="/inbetwin-logo.png" alt="inBeTwin" className="h-16 w-auto brightness-0 invert" />
           </a>
 
           <nav className="flex flex-col gap-1.5">
@@ -1146,14 +1140,8 @@ function AuthScreen({
     <main className="min-h-screen overflow-hidden bg-[#040b1b] text-[#e7edff]">
       <div className="mx-auto grid min-h-screen w-full max-w-6xl items-center gap-8 px-5 py-8 lg:grid-cols-[minmax(0,0.9fr)_430px]">
         <section className="hidden lg:block">
-          <a href="/" className="mb-10 flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-[16px] bg-[#e7edff] text-[#071022]">
-              <Sparkles size={22} />
-            </div>
-            <div>
-              <div className="font-display text-4xl italic leading-none">inBeTwin</div>
-              <div className="mt-1 text-sm text-[#8e9ab8]">AI Agent</div>
-            </div>
+          <a href="/" className="mb-10 flex items-center">
+            <img src="/inbetwin-logo.png" alt="inBeTwin" className="h-20 w-auto brightness-0 invert" />
           </a>
 
           <div className="max-w-xl rounded-[22px] border border-[#25314f] bg-[#101c36]/78 p-6 shadow-2xl shadow-black/25">
@@ -1183,14 +1171,8 @@ function AuthScreen({
         </section>
 
         <section className="mx-auto w-full max-w-[430px]">
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <div className="grid h-11 w-11 place-items-center rounded-[14px] bg-[#e7edff] text-[#071022]">
-              <Sparkles size={20} />
-            </div>
-            <div>
-              <div className="font-display text-3xl italic leading-none">inBeTwin</div>
-              <div className="mt-1 text-xs text-[#8e9ab8]">AI Agent</div>
-            </div>
+          <div className="mb-8 flex items-center lg:hidden">
+            <img src="/inbetwin-logo.png" alt="inBeTwin" className="h-16 w-auto brightness-0 invert" />
           </div>
 
           <form onSubmit={onAuth} className="rounded-[22px] border border-[#25314f] bg-[#101c36]/86 p-5 shadow-2xl shadow-black/30 sm:p-6">

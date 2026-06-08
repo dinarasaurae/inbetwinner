@@ -12,7 +12,7 @@ const Navbar: React.FC = () => {
       <div className="flex w-full py-5 px-8 items-center justify-between">
         {/* Left: Logo */}
         <div className="flex items-center">
-          <img src="/logo.png" alt="inBeTwin" className="h-8" onError={(e) => {
+          <img src="/inbetwin-logo.png" alt="inBeTwin" className="h-12 w-auto brightness-0 invert" onError={(e) => {
              // fallback to text if logo not found
              e.currentTarget.style.display = 'none';
              if (e.currentTarget.nextSibling) {

@@ -77,7 +77,7 @@ const Footer: React.FC = () => {
 
         <div className="footer-bottom">
           <div className="footer-logo">
-            in<span className="logo-accent">Be</span>Twin
+            <img src="/inbetwin-logo.png" alt="inBeTwin" className="h-14 w-auto brightness-0 invert" />
           </div>
           <div className="footer-links">
             <a href="#tos" onClick={(e) => { e.preventDefault(); toggleSection('tos'); }}>Условия</a>
