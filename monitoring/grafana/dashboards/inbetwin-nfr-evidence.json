@@ -32,7 +32,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 3,
+        "h": 2,
         "w": 24,
         "x": 0,
         "y": 0
@@ -44,7 +44,7 @@
           "showLineNumbers": false,
           "showMiniMap": false
         },
-        "content": "# inBeTwin NFR Evidence Board\nPresentation-ready view for availability, performance, reliability, capacity and infrastructure health. Targets: availability >= 99%, API Gateway p95 <= 300 ms, 5xx error rate <= 1%, health latency <= 500 ms.",
+        "content": "# inBeTwin NFR Evidence Board\nTargets: availability >= 99%, API Gateway p95 <= 300 ms, 5xx error rate <= 1%, active NFR alerts = 0.",
         "mode": "markdown"
       },
       "pluginVersion": "11.0.0",
@@ -83,15 +83,15 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
+        "h": 3,
         "w": 6,
         "x": 0,
-        "y": 3
+        "y": 2
       },
       "id": 2,
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -155,15 +155,15 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
+        "h": 3,
         "w": 6,
         "x": 6,
-        "y": 3
+        "y": 2
       },
       "id": 3,
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -227,15 +227,15 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
+        "h": 3,
         "w": 6,
         "x": 12,
-        "y": 3
+        "y": 2
       },
       "id": 4,
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -295,10 +295,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
+        "h": 3,
         "w": 6,
         "x": 18,
-        "y": 3
+        "y": 2
       },
       "id": 5,
       "options": {
@@ -381,7 +381,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 5
       },
       "id": 6,
       "options": {
@@ -458,7 +458,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 11
       },
       "id": 7,
       "options": {
@@ -531,7 +531,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 11
       },
       "id": 8,
       "options": {
@@ -602,7 +602,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 22
+        "y": 19
       },
       "id": 9,
       "options": {
@@ -677,7 +677,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 22
+        "y": 19
       },
       "id": 10,
       "options": {
@@ -765,7 +765,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 22
+        "y": 19
       },
       "id": 11,
       "options": {
@@ -841,7 +841,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 27
       },
       "id": 12,
       "options": {
@@ -909,7 +909,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 30
+        "y": 27
       },
       "id": 13,
       "options": {
@@ -977,7 +977,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 38
+        "y": 35
       },
       "id": 14,
       "options": {
@@ -1066,7 +1066,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 38
+        "y": 35
       },
       "id": 15,
       "options": {
@@ -1155,7 +1155,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 38
+        "y": 35
       },
       "id": 16,
       "options": {
@@ -1235,7 +1235,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 43
       },
       "id": 17,
       "options": {
@@ -1282,7 +1282,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 46
+        "y": 43
       },
       "id": 18,
       "options": {

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +31,16 @@ func NewService() *Service {
 			MaxIdleConnDuration: 30 * time.Second,
 			MaxConnDuration:     0,
 
-			RetryIf: func(request *fasthttp.Request) bool {
-				return false
+			MaxIdemponentCallAttempts: 2,
+			RetryIfErr: func(request *fasthttp.Request, attempts int, err error) (bool, bool) {
+				if !isRetryableMethod(string(request.Header.Method())) {
+					return false, false
+				}
+
+				log.Printf("proxy retry after downstream error: method=%s target=%s attempt=%d err=%v",
+					request.Header.Method(), request.URI().Path(), attempts, err)
+
+				return true, true
 			},
 		},
 
@@ -111,6 +120,9 @@ func (s *Service) ProxyRequest(c fiber.Ctx, targetURL string) error {
 
 	err := s.client.Do(req, resp)
 	if err != nil {
+		log.Printf("proxy downstream error: method=%s path=%s target=%s err=%v",
+			c.Method(), c.Path(), targetURL+targetPath, err)
+
 		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
 			"error":   "service unavailable",
 			"service": targetURL,
@@ -127,4 +139,13 @@ func (s *Service) ProxyRequest(c fiber.Ctx, targetURL string) error {
 	}
 
 	return c.Send(resp.Body())
+}
+
+func isRetryableMethod(method string) bool {
+	switch method {
+	case "GET", "HEAD", "OPTIONS":
+		return true
+	default:
+		return false
+	}
 }

@@ -3,7 +3,7 @@
 # inBeTwin — top-level Makefile
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help up down logs monitoring-up monitoring-down monitoring-logs test-integration test-unit test-provider clean
+.PHONY: help up down logs monitoring-up monitoring-down monitoring-logs smoke-local smoke-prod test-integration test-unit test-provider clean
 
 # ── Local stack ───────────────────────────────────────────────────────────────
 
@@ -15,6 +15,8 @@ help:
 	@echo "  make monitoring-up       — start stack with Prometheus + Grafana"
 	@echo "  make monitoring-down     — stop stack with monitoring overlay"
 	@echo "  make monitoring-logs     — tail monitoring logs"
+	@echo "  make smoke-local         — run a gentle k6 smoke test against local Docker"
+	@echo "  make smoke-prod          — run the same k6 smoke test against production"
 	@echo ""
 	@echo "  make test-unit           — run pure unit tests (no DB, no network)"
 	@echo "  make test-provider       — run LLM provider unit tests in llm-service"
@@ -39,6 +41,57 @@ monitoring-down:
 
 monitoring-logs:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml logs -f prometheus grafana blackbox-exporter cadvisor postgres-exporter redis-exporter rabbitmq
+
+# ── k6 smoke load test ───────────────────────────────────────────────────────
+
+K6_IMAGE ?= grafana/k6:latest
+K6_BASE_URL ?= http://host.docker.internal
+K6_PROD_BASE_URL ?= https://inbetwin.ru
+K6_VUS ?= 2
+K6_DURATION ?= 3m
+K6_RAMP_UP ?= 30s
+K6_RAMP_DOWN ?= 30s
+K6_P95_MS ?= 300
+K6_ERROR_RATE ?= 0.01
+K6_SUCCESS_RATE ?= 0.99
+K6_TEST_EMAIL ?= nfr-smoke@example.com
+K6_TEST_PASSWORD ?= nfr-smoke-password
+
+smoke-local:
+	docker run --rm --add-host=host.docker.internal:host-gateway \
+		-e BASE_URL="$(K6_BASE_URL)" \
+		-e K6_AUTO_REGISTER="true" \
+		-e TEST_EMAIL="$(K6_TEST_EMAIL)" \
+		-e TEST_PASSWORD="$(K6_TEST_PASSWORD)" \
+		-e K6_VUS="$(K6_VUS)" \
+		-e K6_DURATION="$(K6_DURATION)" \
+		-e K6_RAMP_UP="$(K6_RAMP_UP)" \
+		-e K6_RAMP_DOWN="$(K6_RAMP_DOWN)" \
+		-e K6_P95_MS="$(K6_P95_MS)" \
+		-e K6_ERROR_RATE="$(K6_ERROR_RATE)" \
+		-e K6_SUCCESS_RATE="$(K6_SUCCESS_RATE)" \
+		-v "$(CURDIR)/tests/k6:/scripts:ro" \
+		$(K6_IMAGE) run /scripts/smoke.js
+
+smoke-prod:
+	@if [ "$(K6_TEST_EMAIL)" = "nfr-smoke@example.com" ]; then \
+		echo "Set K6_TEST_EMAIL and K6_TEST_PASSWORD for an existing production test user."; \
+		exit 1; \
+	fi
+	docker run --rm \
+		-e BASE_URL="$(K6_PROD_BASE_URL)" \
+		-e K6_AUTO_REGISTER="false" \
+		-e TEST_EMAIL="$(K6_TEST_EMAIL)" \
+		-e TEST_PASSWORD="$(K6_TEST_PASSWORD)" \
+		-e K6_VUS="$(K6_VUS)" \
+		-e K6_DURATION="$(K6_DURATION)" \
+		-e K6_RAMP_UP="$(K6_RAMP_UP)" \
+		-e K6_RAMP_DOWN="$(K6_RAMP_DOWN)" \
+		-e K6_P95_MS="$(K6_P95_MS)" \
+		-e K6_ERROR_RATE="$(K6_ERROR_RATE)" \
+		-e K6_SUCCESS_RATE="$(K6_SUCCESS_RATE)" \
+		-v "$(CURDIR)/tests/k6:/scripts:ro" \
+		$(K6_IMAGE) run /scripts/smoke.js
 
 # ── Unit tests (no Docker required) ───────────────────────────────────────────
 
