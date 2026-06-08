@@ -23,15 +23,46 @@ variables:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   script:
     - |
-      docker build \
+      retry() {
+        attempts=1
+        max_attempts=3
+        until "$@"; do
+          status=$?
+          if [ "$attempts" -ge "$max_attempts" ]; then
+            return "$status"
+          fi
+          sleep_seconds=$((attempts * 15))
+          echo "Command failed with status $status. Retrying in ${sleep_seconds}s (${attempts}/${max_attempts})..."
+          sleep "$sleep_seconds"
+          attempts=$((attempts + 1))
+        done
+      }
+
+      retry docker build \
         --cache-from "${IMAGE_PREFIX}/${SERVICE}:latest" \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
         -f "${DOCKERFILE}" \
         -t "${IMAGE_PREFIX}/${SERVICE}:${CI_COMMIT_SHORT_SHA}" \
         -t "${IMAGE_PREFIX}/${SERVICE}:latest" \
         .
-    - docker push "${IMAGE_PREFIX}/${SERVICE}:${CI_COMMIT_SHORT_SHA}"
-    - docker push "${IMAGE_PREFIX}/${SERVICE}:latest"
+    - |
+      retry() {
+        attempts=1
+        max_attempts=3
+        until "$@"; do
+          status=$?
+          if [ "$attempts" -ge "$max_attempts" ]; then
+            return "$status"
+          fi
+          sleep_seconds=$((attempts * 15))
+          echo "Command failed with status $status. Retrying in ${sleep_seconds}s (${attempts}/${max_attempts})..."
+          sleep "$sleep_seconds"
+          attempts=$((attempts + 1))
+        done
+      }
+
+      retry docker push "${IMAGE_PREFIX}/${SERVICE}:${CI_COMMIT_SHORT_SHA}"
+      retry docker push "${IMAGE_PREFIX}/${SERVICE}:latest"
   rules:
     - if: $CI_COMMIT_BRANCH == "feat/agent-pipeline"
     - if: $CI_PIPELINE_SOURCE == "web"
