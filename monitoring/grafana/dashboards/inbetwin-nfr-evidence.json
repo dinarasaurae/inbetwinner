@@ -560,7 +560,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "avg_over_time(probe_success{job=\"blackbox-http\", service=~\"$service\"}[$__range]) * 100",
+          "expr": "avg_over_time(probe_success{job=\"blackbox-http\", service=~\"$service\"}[$__range]) * 100 or label_replace(last_over_time(pg_up{job=\"postgres-exporter\"}[$__range]) * 100, \"service\", \"postgresql\", \"job\", \".*\") or label_replace(last_over_time(redis_up{job=\"redis-exporter\"}[$__range]) * 100, \"service\", \"redis\", \"job\", \".*\") or label_replace(last_over_time(up{job=\"rabbitmq\"}[$__range]) * 100, \"service\", \"rabbitmq\", \"job\", \".*\")",
           "legendFormat": "{{service}}",
           "range": true,
           "refId": "A"
