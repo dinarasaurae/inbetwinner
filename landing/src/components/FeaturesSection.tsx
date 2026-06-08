@@ -14,14 +14,14 @@ const FeaturesSection: React.FC = () => {
             <br />Оркестрация агентов
           </h2>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            Один AI Supervisor анализирует сообщение и назначает цепочку из 5 автономных агентов
-            для скоринга, RAG-поиска и моментального ответа.
+            Система понимает сообщение клиента, находит нужный контекст и запускает агентов
+            для скоринга, поиска по базе знаний и быстрого ответа.
           </p>
         </div>
 
         {/* 3D R3F Nodes Viewport */}
         <div className="relative w-full h-[600px] md:h-[800px] rounded-[32px] overflow-hidden liquid-glass border border-white/5">
-          <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-muted-foreground">Инициализация AI-нодов...</div>}>
+          <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-muted-foreground">Инициализация схемы...</div>}>
             <AgentNetwork3D />
           </Suspense>
           

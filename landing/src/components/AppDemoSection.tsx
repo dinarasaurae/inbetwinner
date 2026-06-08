@@ -4,8 +4,8 @@ import { Zap, Users, Activity } from 'lucide-react';
 
 const chatSequence = [
   { id: 1, type: 'user', text: "Здравствуйте! Подскажите, какие тарифы у вашей платформы для отдела из 15 менеджеров?", delay: 1000 },
-  { id: 2, type: 'agent', text: "Добрый день! AI Supervisor проанализировал ваш запрос. Для отдела из 15 человек идеально подойдет тариф 'Enterprise'.", delay: 3000 },
-  { id: 3, type: 'system', text: "✨ Lead Score обновлен: 94% (Hot)", delay: 4500 },
+  { id: 2, type: 'agent', text: "Добрый день! Для отдела из 15 человек подойдет тариф Enterprise: он включает все интеграции, квалификацию лидов и поддержку команды.", delay: 3000 },
+  { id: 3, type: 'system', text: "Lead Score обновлен: 94% (Hot)", delay: 4500 },
   { id: 4, type: 'action', text: "Задача создана в Notion: 'Демо для 15 менеджеров'", delay: 5500 },
 ];
 
@@ -71,10 +71,10 @@ const AppDemoSection: React.FC = () => {
             transition={{ duration: 0.6 }}
           >
             <h2 className="text-4xl md:text-5xl font-display text-foreground font-bold mb-6">
-              Агенты действуют <span className="text-transparent bg-clip-text accent-gradient inline-block">мгновенно</span>
+              Клиенты получают ответ <span className="text-transparent bg-clip-text accent-gradient inline-block">сразу</span>
             </h2>
             <p className="text-muted-foreground text-lg leading-relaxed mb-8">
-              Вместо ожидания операторов, <strong>AI Supervisor</strong> моментально анализирует контекст и делегирует задачу <strong>Nurturing Agent</strong>'у, который не только отвечает клиенту, но и обновляет CRM в реальном времени.
+              Агент понимает вопрос клиента, отвечает в стиле компании и фиксирует результат в CRM. Менеджер видит готовый контекст и подключается только там, где нужен человек.
             </p>
             <ul className="flex flex-col gap-4">
               <li className="flex items-center gap-3 p-4 liquid-glass rounded-xl border border-white/10">
@@ -133,9 +133,9 @@ const AppDemoSection: React.FC = () => {
                    <Activity size={18} className="text-green-400" />
                  </div>
                  <div>
-                   <div className="text-xs text-foreground font-semibold">AI Supervisor</div>
+                   <div className="text-xs text-foreground font-semibold">Ассистент inBeTwin</div>
                    <div className="text-[10px] text-green-400 flex items-center gap-1">
-                     <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> Orchestrating
+                     <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> На связи
                    </div>
                  </div>
                </div>
@@ -167,7 +167,7 @@ const AppDemoSection: React.FC = () => {
                
                {/* Typing UI */}
                <div className="h-10 rounded-full bg-white/5 border border-white/10 flex items-center px-4 relative z-20">
-                 <span className="text-xs text-muted-foreground font-medium">Monitoring memory stream...</span>
+                 <span className="text-xs text-muted-foreground font-medium">Печатает ответ...</span>
                </div>
             </div>
           </motion.div>

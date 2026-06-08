@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 
-const brands = ["Vortex", "Nimbus", "Prysma", "Cirrus", "Kynder", "Halcyn"];
+const brands = ["VK", "Telegram", "Zoho CRM", "Google"];
 
 // Create seamless loop duplicate
 const marqueeItems = [...brands, ...brands, ...brands];
@@ -67,7 +67,7 @@ const SocialProofSection: React.FC = () => {
         autoPlay 
         muted 
         playsInline 
-        className="absolute inset-0 w-full h-full object-cover z-0"
+        className="absolute inset-0 w-full h-full object-cover object-[center_40%] scale-[1.12] z-0"
         style={{ opacity: 0, transition: 'opacity 0.1s linear' }}
       />
       
@@ -81,14 +81,7 @@ const SocialProofSection: React.FC = () => {
         <div className="h-40 w-full" />
         
         {/* Logo Marquee Container */}
-        <div className="max-w-5xl w-full mx-auto flex flex-col md:flex-row items-center justify-between gap-8">
-          {/* Left Text */}
-          <div className="text-foreground/50 text-sm whitespace-nowrap shrink-0 md:text-left text-center">
-            Доверяют лучшие бренды <br/>
-            по всему миру
-          </div>
-
-          {/* Right Marquee */}
+        <div className="max-w-5xl w-full mx-auto">
           <div className="w-full overflow-hidden relative">
              <div className="absolute top-0 bottom-0 left-0 w-16 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none"></div>
              <div className="absolute top-0 bottom-0 right-0 w-16 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none"></div>

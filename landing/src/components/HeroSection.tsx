@@ -37,7 +37,7 @@ const HeroSection: React.FC = () => {
           loop
           muted
           playsInline
-          className="w-full h-full object-cover mix-blend-screen"
+          className="w-full h-full object-cover object-[center_42%] scale-[1.12] mix-blend-screen"
           style={{ opacity: 0, transition: 'opacity 2s ease-out' }}
           onLoadedData={(e) => { e.currentTarget.style.opacity = '1'; }}
         />
@@ -62,13 +62,13 @@ const HeroSection: React.FC = () => {
             className="text-6xl md:text-8xl lg:text-[140px] font-normal leading-[0.9] tracking-[-0.04em] mb-8 text-left"
             style={{ fontFamily: "'Geist Sans', sans-serif" }}
           >
-            <span className="text-transparent bg-clip-text" style={{ backgroundImage: "linear-gradient(223deg, #E8E8E9 0%, #3A7BBF 104.15%)" }}>Grow</span><br/>
-            <span className="font-display italic text-5xl md:text-7xl lg:text-[110px] text-hero-heading leading-[0.9]">вместе с AI</span>
+            <span className="text-transparent bg-clip-text" style={{ backgroundImage: "linear-gradient(223deg, #E8E8E9 0%, #3A7BBF 104.15%)" }}>Растите</span><br/>
+            <span className="font-display italic text-5xl md:text-7xl lg:text-[110px] text-hero-heading leading-[0.9]">через диалоги</span>
           </h1>
 
           {/* Subtext */}
           <p className="text-hero-sub text-lg leading-8 max-w-md opacity-80 font-body text-left">
-            Самые автономные AI-агенты<br/>
+            Автономные агенты<br/>
             для обработки B2B лидов
           </p>
 

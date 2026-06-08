@@ -52,6 +52,11 @@ type AuthResponse = {
   user: UserProfile;
 };
 
+type RefreshResponse = {
+  access_token: string;
+  expires_in?: number;
+};
+
 type AuthMode = 'login' | 'register';
 type AppTab = 'workspace' | 'integrations' | 'agent' | 'knowledge' | 'profile';
 type ProfileSection = 'main' | 'personal' | 'security' | 'notifications' | 'statistics' | 'accounts';
@@ -252,7 +257,7 @@ const agentEvents = [
   {
     title: 'VK lead qualified',
     meta: '12 секунд назад',
-    detail: 'AI Supervisor поднял score до 94 и подготовил следующий шаг.',
+    detail: 'Агент поднял score до 94 и подготовил следующий шаг.',
     tone: 'green',
   },
   {
@@ -313,6 +318,16 @@ function unwrapPayload<T>(payload: unknown): T {
   return payload as T;
 }
 
+class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => null);
 
@@ -327,13 +342,13 @@ async function readJson<T>(response: Response): Promise<T> {
       ? (payload as { message?: string }).message
       : null;
 
-    throw new Error(String(error || message || details || 'Request failed'));
+    throw new ApiRequestError(String(error || message || details || 'Request failed'), response.status);
   }
 
   return unwrapPayload<T>(payload);
 }
 
-async function apiRequest<T>(path: string, token: string | null, init: RequestInit = {}) {
+function buildRequestHeaders(init: RequestInit, token: string | null) {
   const headers = new Headers(init.headers);
   if (!headers.has('Content-Type') && init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
@@ -341,9 +356,61 @@ async function apiRequest<T>(path: string, token: string | null, init: RequestIn
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
+  return headers;
+}
 
-  const response = await fetch(path, { ...init, headers });
-  return readJson<T>(response);
+async function refreshStoredAccessToken(): Promise<string | null> {
+  const refreshToken = localStorage.getItem('inbetwin_refresh_token');
+  if (!refreshToken) {
+    return null;
+  }
+
+  const response = await fetch('/api/v1/auth/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  const payload = await readJson<RefreshResponse>(response);
+  if (!payload.access_token) {
+    return null;
+  }
+
+  saveAuthSession(payload.access_token);
+  window.dispatchEvent(new CustomEvent('inbetwin:auth-token', { detail: { accessToken: payload.access_token } }));
+  return payload.access_token;
+}
+
+async function apiRequest<T>(path: string, token: string | null, init: RequestInit = {}) {
+  const storedToken = token ? localStorage.getItem('inbetwin_access_token') : null;
+  const effectiveToken = storedToken || token;
+  const doFetch = (nextToken: string | null) => (
+    fetch(path, { ...init, headers: buildRequestHeaders(init, nextToken) })
+  );
+
+  const response = await doFetch(effectiveToken);
+
+  try {
+    return await readJson<T>(response);
+  } catch (error) {
+    if (
+      token &&
+      error instanceof ApiRequestError &&
+      error.status === 401 &&
+      !path.includes('/api/v1/auth/refresh')
+    ) {
+      const nextToken = await refreshStoredAccessToken().catch(() => null);
+      if (nextToken) {
+        const retry = await doFetch(nextToken);
+        return readJson<T>(retry);
+      }
+    }
+
+    if (token && error instanceof ApiRequestError && error.status === 401) {
+      throw new Error('Сессия истекла. Войдите снова и повторите действие.');
+    }
+
+    throw error;
+  }
 }
 
 async function apiMaybe<T>(path: string, token: string | null, init: RequestInit = {}): Promise<T | null> {
@@ -502,13 +569,43 @@ const WebApp: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const handleTokenRefresh = (event: Event) => {
+      const accessToken = (event as CustomEvent<{ accessToken?: string }>).detail?.accessToken;
+      if (accessToken) {
+        setToken(accessToken);
+      }
+    };
+
+    window.addEventListener('inbetwin:auth-token', handleTokenRefresh);
+    return () => window.removeEventListener('inbetwin:auth-token', handleTokenRefresh);
+  }, []);
+
+  useEffect(() => {
     const isVKCallback =
       window.location.pathname === '/app/auth/vk/callback' ||
       window.location.pathname === '/auth/vk/callback';
+    const query = new URLSearchParams(window.location.search);
+    const groupConnected = query.get('group_connected');
 
     if (window.location.pathname === '/app/vk-error') {
-      const reason = new URLSearchParams(window.location.search).get('reason') || 'VK auth failed';
+      const reason = query.get('reason') || 'VK auth failed';
       window.setTimeout(() => setAuthStatus(`VK: ${reason}`), 0);
+      window.history.replaceState(null, '', '/app');
+      return;
+    }
+
+    if (window.location.pathname.startsWith('/app/dashboard/vk/groups') || groupConnected) {
+      window.setTimeout(() => {
+        setActiveTab('integrations');
+        setNotice({
+          tone: 'success',
+          text: groupConnected ? `VK-сообщество ${groupConnected} подключено.` : 'VK подключен. Обновляем список сообществ.',
+        });
+        const storedToken = localStorage.getItem('inbetwin_access_token');
+        if (storedToken) {
+          void loadAppData(storedToken);
+        }
+      }, 0);
       window.history.replaceState(null, '', '/app');
       return;
     }
@@ -518,7 +615,6 @@ const WebApp: React.FC = () => {
     }
 
     const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-    const query = new URLSearchParams(window.location.search);
     const error = fragment.get('error') || query.get('error');
 
     if (error) {
@@ -544,7 +640,7 @@ const WebApp: React.FC = () => {
       setNotice({ tone: 'success', text: 'Вход через VK выполнен.' });
     }, 0);
     window.history.replaceState(null, '', '/app');
-  }, []);
+  }, [loadAppData]);
 
   useEffect(() => {
     if (token) {
@@ -619,12 +715,24 @@ const WebApp: React.FC = () => {
     if (!token) {
       return;
     }
-    setStatus('info', 'Открываем VK OAuth...');
+    const groupRef = manualGroupRef.trim();
+    const oauthPath = groupRef
+      ? `/api/v1/social/vk/oauth/start?platform=web&group_ref=${encodeURIComponent(groupRef)}`
+      : activeIntegrationId
+      ? `/api/v1/social/vk/community-access/start?platform=web&integration_id=${encodeURIComponent(activeIntegrationId)}`
+      : '';
+
+    if (!oauthPath) {
+      setStatus('error', 'Укажите ID или ссылку VK-сообщества, чтобы подключить его через OAuth.');
+      return;
+    }
+
+    setStatus('info', 'Открываем VK для доступа к сообществу...');
     try {
-      const result = await apiRequest<{ auth_url: string }>('/api/v1/social/vk/oauth/user/start?platform=web', token);
+      const result = await apiRequest<{ auth_url: string }>(oauthPath, token);
       window.location.href = result.auth_url;
     } catch (error) {
-      setStatus('error', error instanceof Error ? error.message : 'VK OAuth недоступен.');
+      setStatus('error', error instanceof Error ? error.message : 'Не удалось открыть VK OAuth для сообщества.');
     }
   };
 
@@ -1616,7 +1724,7 @@ function IntegrationsView({
                 </div>
                 <PrimaryAction onClick={onStartVKOAuth}>
                   <ExternalLink size={16} />
-                  VK OAuth
+                  Подключить через VK
                 </PrimaryAction>
               </div>
 
